@@ -2,488 +2,485 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>OutLoud — audio spike</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>OutLoud</title>
     <style>
       :root {
         --ink: #16262b;
         --ink-soft: #4c6068;
         --paper: #f1f4f0;
-        --surface: #fff;
+        --surface: #ffffff;
         --mist: #e1e8e2;
         --sage: #2f6b57;
+        --ochre: #b07d22;
         --warn: #8e3b2f;
         --line: rgba(22, 38, 43, 0.14);
-        --serif: Georgia, "Times New Roman", serif;
+        --serif: Georgia, "Iowan Old Style", "Times New Roman", serif;
         --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
       }
       * {
         box-sizing: border-box;
       }
+      html,
       body {
         margin: 0;
+        height: 100%;
+      }
+      body {
         background: var(--paper);
         color: var(--ink);
         font-family: var(--sans);
         line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
       }
-      .wrap {
-        max-width: 520px;
+      .app {
+        max-width: 460px;
         margin: 0 auto;
-        padding: 22px 18px 60px;
+        padding: 22px 20px 40px;
+        min-height: 100%;
+      }
+      .screen {
+        display: none;
+      }
+      .screen.on {
+        display: block;
+      }
+
+      .topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 11.5px;
+        color: var(--ink-soft);
+        letter-spacing: 0.04em;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--line);
+        margin-bottom: 22px;
       }
       h1 {
         font-family: var(--serif);
         font-weight: 400;
-        font-size: 26px;
+        font-size: 27px;
+        line-height: 1.25;
+        margin: 6px 0 16px;
+      }
+      h2 {
+        font-family: var(--serif);
+        font-weight: 400;
+        font-size: 22px;
+        margin: 0 0 14px;
+      }
+      p {
+        margin: 0 0 14px;
+      }
+
+      .btn {
+        display: block;
+        width: 100%;
+        text-align: center;
+        border-radius: 12px;
+        padding: 14px 12px;
+        font-size: 15px;
+        font-family: var(--sans);
+        border: 1px solid var(--sage);
+        margin-top: 10px;
+        text-decoration: none;
+        cursor: pointer;
+        background: transparent;
+        color: var(--sage);
+      }
+      .btn.primary {
+        background: var(--sage);
+        color: #fff;
+      }
+      .btn.plain {
+        border-color: var(--line);
+        color: var(--ink-soft);
+      }
+      .btn:disabled {
+        opacity: 0.45;
+      }
+
+      .list {
+        list-style: none;
+        margin: 0 0 22px;
+        padding: 0;
+      }
+      .list li {
+        font-size: 14.5px;
+        padding: 0 0 12px 22px;
+        position: relative;
+      }
+      .list li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 9px;
+        width: 9px;
+        height: 1.5px;
+        background: var(--sage);
+      }
+
+      .privacy {
+        font-size: 12.5px;
+        line-height: 1.5;
+        color: var(--ink-soft);
+        background: var(--mist);
+        border-radius: 12px;
+        padding: 13px 14px;
         margin: 0 0 6px;
       }
-      .sub {
+      .linky {
+        background: none;
+        border: 0;
+        padding: 0;
+        margin: 10px 0 0;
+        font-size: 13px;
         color: var(--ink-soft);
-        font-size: 14px;
-        margin: 0 0 18px;
+        text-decoration: underline;
+        font-family: var(--sans);
+        cursor: pointer;
       }
-      .banner {
-        border-radius: 12px;
-        padding: 12px 14px;
+
+      .pick {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .pick li {
+        border-top: 1px solid var(--line);
+      }
+      .pick button {
+        width: 100%;
+        text-align: left;
+        background: none;
+        border: 0;
+        padding: 15px 0;
+        font-family: var(--sans);
+        cursor: pointer;
+        color: var(--ink);
+      }
+      .pick .t {
+        font-size: 16px;
+        display: block;
+      }
+      .pick .b {
+        font-size: 13px;
+        color: var(--ink-soft);
+        display: block;
+        margin-top: 2px;
+      }
+
+      .q {
+        font-family: var(--serif);
+        font-size: 20px;
+        line-height: 1.35;
+        margin: 0 0 10px;
+      }
+      .replay {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--ink-soft);
+        border: 1px solid var(--line);
+        border-radius: 99px;
+        padding: 5px 11px;
+        background: none;
+        font-family: var(--sans);
+        cursor: pointer;
+      }
+
+      .mic-stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        margin: 44px 0 0;
+      }
+      .mic {
+        position: relative;
+        width: 96px;
+        height: 96px;
+        border-radius: 50%;
+        background: var(--sage);
+        border: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        padding: 0;
+      }
+      .mic[data-state="recording"] {
+        background: var(--warn);
+      }
+      .mic:disabled {
+        opacity: 0.5;
+      }
+      .mic::after {
+        content: "";
+        position: absolute;
+        inset: -14px;
+        border-radius: 50%;
+        border: 1.5px solid var(--sage);
+        opacity: 0.32;
+        animation: breathe 4.2s ease-in-out infinite;
+      }
+      .mic[data-state="recording"]::after {
+        border-color: var(--warn);
+        animation-duration: 2.4s;
+      }
+      .mic[data-state="idle"]::after,
+      .mic:disabled::after {
+        animation: none;
+        opacity: 0.2;
+      }
+      @keyframes breathe {
+        0%,
+        100% {
+          transform: scale(0.94);
+          opacity: 0.32;
+        }
+        50% {
+          transform: scale(1.06);
+          opacity: 0.08;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .mic::after {
+          animation: none;
+        }
+      }
+      .mic svg {
+        width: 36px;
+        height: 36px;
+        fill: none;
+        stroke: #fff;
+        stroke-width: 1.6;
+        stroke-linecap: round;
+      }
+
+      .state {
+        margin: 22px 0 4px;
+        font-size: 16px;
+        text-align: center;
+      }
+      .hint {
+        margin: 0;
         font-size: 13.5px;
-        margin: 0 0 16px;
-      }
-      .banner.bad {
-        background: rgba(142, 59, 47, 0.1);
-        border: 1px solid rgba(142, 59, 47, 0.3);
-        color: var(--warn);
-      }
-      .banner.ok {
-        background: var(--mist);
-        border: 1px solid var(--line);
         color: var(--ink-soft);
+        text-align: center;
       }
+      .foot {
+        margin-top: 44px;
+        padding-top: 14px;
+        border-top: 1px solid var(--line);
+        text-align: center;
+      }
+
       .card {
-        background: var(--surface);
-        border: 1px solid var(--line);
         border-radius: 14px;
         padding: 16px;
         margin: 0 0 14px;
       }
-      .q {
-        font-family: var(--serif);
-        font-size: 19px;
-        line-height: 1.35;
-        margin: 0 0 14px;
+      .card.worked {
+        background: rgba(176, 125, 34, 0.1);
+        border: 1px solid rgba(176, 125, 34, 0.28);
       }
-      button {
-        font-family: var(--sans);
-        font-size: 15px;
-        border-radius: 10px;
-        padding: 13px 14px;
-        border: 1px solid var(--sage);
-        width: 100%;
-        cursor: pointer;
+      .card.next {
+        background: var(--mist);
+        border: 1px solid var(--line);
       }
-      button.primary {
-        background: var(--sage);
-        color: #fff;
-      }
-      button.stop {
-        background: var(--warn);
-        border-color: var(--warn);
-        color: #fff;
-      }
-      button:disabled {
-        opacity: 0.45;
-      }
-      .timer {
-        font-family: var(--serif);
-        font-size: 34px;
-        text-align: center;
-        margin: 14px 0 4px;
-      }
-      .state {
-        text-align: center;
-        font-size: 14px;
-        color: var(--ink-soft);
-        margin: 0 0 14px;
-      }
-      .label {
+      .card h3 {
+        margin: 0 0 8px;
         font-size: 11px;
-        letter-spacing: 0.13em;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        font-weight: 600;
+        color: var(--ink-soft);
+      }
+      .card p {
+        margin: 0;
+        font-size: 15px;
+      }
+
+      .done-label {
+        font-size: 12px;
+        letter-spacing: 0.14em;
         text-transform: uppercase;
         color: var(--ink-soft);
-        margin: 0 0 6px;
+        margin: 0 0 4px;
       }
-      .out {
-        white-space: pre-wrap;
-        font-size: 15px;
-        padding: 12px;
-        background: var(--mist);
-        border-radius: 10px;
-      }
-      .meta {
-        font-size: 12.5px;
+      .done-meta {
+        font-size: 13px;
         color: var(--ink-soft);
-        margin: 12px 0 0;
+        margin: 0 0 22px;
       }
-      select {
-        width: 100%;
-        padding: 11px;
-        border-radius: 10px;
-        border: 1px solid var(--line);
-        background: var(--surface);
-        font-size: 15px;
-        margin-bottom: 14px;
-        font-family: var(--sans);
+
+      .greet {
+        font-family: var(--serif);
+        font-size: 25px;
+        margin: 8px 0 24px;
       }
-      textarea {
-        width: 100%;
-        height: 170px;
-        font-family: ui-monospace, Menlo, Consolas, monospace;
-        font-size: 12px;
-        padding: 12px;
-        border-radius: 10px;
-        border: 1px solid var(--line);
-        background: var(--surface);
+      .count {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        margin: 0 0 30px;
+      }
+      .count b {
+        font-family: var(--serif);
+        font-size: 56px;
+        font-weight: 400;
+        line-height: 1;
+        color: var(--sage);
+      }
+      .count span {
+        font-size: 14px;
+        color: var(--ink-soft);
+        max-width: 11ch;
+      }
+      .small {
+        font-size: 13px;
+        color: var(--ink-soft);
+        margin: 18px 0 6px;
+      }
+
+      .error {
+        background: rgba(142, 59, 47, 0.1);
+        border: 1px solid rgba(142, 59, 47, 0.3);
+        color: var(--warn);
+        border-radius: 12px;
+        padding: 12px 14px;
+        font-size: 14px;
+        margin: 0 0 14px;
+      }
+      .hidden {
+        display: none;
       }
     </style>
   </head>
   <body>
-    <div class="wrap">
-      <h1>Audio spike</h1>
-      <p class="sub">
-        Records your answer, sends the audio itself to the AI, and asks it to
-        transcribe and follow up. No chime, no restarts. We are measuring
-        transcript quality and how long the wait feels.
-      </p>
-
-      <div id="health" class="banner ok">Checking server…</div>
-
-      <select id="model">
-        <option value="">Model: let the server choose</option>
-        <option value="gemini-3.7-flash">gemini-3.7-flash</option>
-        <option value="gemini-3.6-flash">gemini-3.6-flash</option>
-        <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-        <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite</option>
-      </select>
-
-      <select id="question">
-        <option>Tell me about yourself.</option>
-        <option>Tell me about something you built or worked on.</option>
-        <option>Why should we hire you?</option>
-      </select>
-
-      <div class="card">
-        <p class="q" id="qshow">Tell me about yourself.</p>
-        <div class="timer" id="timer">0:00</div>
-        <p class="state" id="state">Not recording</p>
-        <button class="primary" id="rec" disabled>Start recording</button>
-        <p class="meta" id="fmt"></p>
-      </div>
-
-      <div class="card" id="result" style="display: none">
-        <p class="label">Transcript</p>
-        <div class="out" id="transcript"></div>
-        <p class="label" style="margin-top: 16px">Follow-up question</p>
-        <div class="out" id="followup"></div>
-        <p class="meta" id="stats"></p>
-      </div>
-
-      <div id="reportBox" style="display: none">
-        <p class="label">Copy this into the chat</p>
-        <textarea id="report" readonly></textarea>
-        <button class="primary" id="copy" style="margin-top: 10px">
-          Copy results
+    <div class="app">
+      <!-- 1. Welcome -->
+      <section class="screen on" id="s-welcome">
+        <div class="topbar">
+          <span>OutLoud</span><span>Before you start</span>
+        </div>
+        <h1>A place to practice speaking, where nobody is listening.</h1>
+        <ul class="list">
+          <li>You pick a situation. You will be asked four questions.</li>
+          <li>You answer out loud, like a real interview.</li>
+          <li>About four minutes. You can stop any time.</li>
+          <li>At the end: one thing that worked, one thing to try.</li>
+        </ul>
+        <p class="privacy">
+          Nobody hears you. Your voice is never recorded or saved — only your
+          words are sent to the AI that replies.
+        </p>
+        <button class="linky" id="go-privacy">
+          What happens to my answers?
         </button>
-      </div>
+        <button class="btn primary" id="go-scenarios">Start</button>
+      </section>
+
+      <!-- 1b. Privacy detail -->
+      <section class="screen" id="s-privacy">
+        <div class="topbar"><span>Back</span><span>Your answers</span></div>
+        <h2>What happens to what you say</h2>
+        <ul class="list">
+          <li>
+            <strong>Your voice is not saved.</strong> The recording is used to
+            work out what you said, then discarded.
+          </li>
+          <li>
+            <strong>Your words go to an AI service</strong> so it can ask the
+            next question and write your feedback. The service may use them to
+            improve its AI.
+          </li>
+          <li>
+            <strong>Your practice stays on this phone</strong> so you can come
+            back and continue.
+          </li>
+          <li>
+            <strong>No other person sees any of it.</strong> Not other users,
+            not employers.
+          </li>
+        </ul>
+        <button class="btn plain" id="back-welcome">Back</button>
+      </section>
+
+      <!-- 2. Choose -->
+      <section class="screen" id="s-choose">
+        <div class="topbar"><span>OutLoud</span><span>Choose</span></div>
+        <h2>What do you want to practice?</h2>
+        <ul class="pick" id="scenario-list"></ul>
+      </section>
+
+      <!-- 3. Speaking -->
+      <section class="screen" id="s-speak">
+        <div class="topbar">
+          <span id="sp-scenario">Practice</span
+          ><span id="sp-progress">Question 1 of 4</span>
+        </div>
+        <div class="error hidden" id="sp-error"></div>
+        <p class="q" id="sp-question">…</p>
+        <button class="replay" id="sp-replay">↻ Hear it again</button>
+        <div class="mic-stage">
+          <button
+            class="mic"
+            id="sp-mic"
+            data-state="idle"
+            aria-label="Record your answer"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <rect x="9" y="3" width="6" height="11" rx="3" />
+              <path d="M5 11a7 7 0 0 0 14 0" />
+              <path d="M12 18v3" />
+            </svg>
+          </button>
+          <p class="state" id="sp-state">Tap to answer</p>
+          <p class="hint" id="sp-hint">Take your time.</p>
+        </div>
+        <div class="foot">
+          <button class="linky" id="sp-quit">Start again</button>
+        </div>
+      </section>
+
+      <!-- 4. Feedback -->
+      <section class="screen" id="s-feedback">
+        <div class="topbar">
+          <span id="fb-scenario">Practice</span><span>Complete</span>
+        </div>
+        <p class="done-label">Session complete</p>
+        <p class="done-meta" id="fb-meta">—</p>
+        <div class="card worked">
+          <h3>What worked</h3>
+          <p id="fb-strength">…</p>
+        </div>
+        <div class="card next">
+          <h3>Try this next time</h3>
+          <p id="fb-improvement">…</p>
+        </div>
+        <button class="btn primary" id="fb-retry">Try that answer again</button>
+        <button class="btn" id="fb-done">Done for today</button>
+      </section>
+
+      <!-- 5. Home -->
+      <section class="screen" id="s-home">
+        <div class="topbar"><span>OutLoud</span><span></span></div>
+        <p class="greet" id="home-greet">Welcome back</p>
+        <div class="count">
+          <b id="home-count">0</b><span>sessions completed</span>
+        </div>
+        <button class="btn primary" id="home-again">Practice again</button>
+        <p class="small" id="home-last"></p>
+        <p class="small">Or pick another</p>
+        <ul class="pick" id="home-list"></ul>
+      </section>
     </div>
-
-    <script>
-      (function () {
-        "use strict";
-
-        var recBtn = document.getElementById("rec");
-        var stateEl = document.getElementById("state");
-        var timerEl = document.getElementById("timer");
-        var fmtEl = document.getElementById("fmt");
-        var healthEl = document.getElementById("health");
-        var qSel = document.getElementById("question");
-        var qShow = document.getElementById("qshow");
-        var runs = [];
-
-        qSel.addEventListener("change", function () {
-          qShow.textContent = qSel.value;
-        });
-
-        // Gemini's documented audio formats do not include webm. Android browsers
-        // differ in what MediaRecorder produces, so prefer formats most likely to be
-        // accepted and record which one was actually used.
-        var CANDIDATES = [
-          "audio/mp4",
-          "audio/aac",
-          "audio/ogg;codecs=opus",
-          "audio/ogg",
-          "audio/webm;codecs=opus",
-          "audio/webm",
-        ];
-
-        function pickFormat() {
-          if (
-            typeof MediaRecorder === "undefined" ||
-            !MediaRecorder.isTypeSupported
-          )
-            return "";
-          for (var i = 0; i < CANDIDATES.length; i++) {
-            if (MediaRecorder.isTypeSupported(CANDIDATES[i]))
-              return CANDIDATES[i];
-          }
-          return "";
-        }
-
-        var chosenFormat = pickFormat();
-
-        if (!navigator.mediaDevices || typeof MediaRecorder === "undefined") {
-          healthEl.className = "banner bad";
-          healthEl.textContent =
-            "This browser cannot record audio. Open in Chrome on Android.";
-          return;
-        }
-        if (!window.isSecureContext) {
-          healthEl.className = "banner bad";
-          healthEl.textContent =
-            "This page must be served over HTTPS or the microphone will not work.";
-          return;
-        }
-
-        fmtEl.textContent = chosenFormat
-          ? "Recording format: " + chosenFormat
-          : "No preferred format supported; the browser default will be used.";
-
-        fetch("/api/health")
-          .then(function (r) {
-            return r.json();
-          })
-          .then(function (h) {
-            if (h.ok) {
-              healthEl.className = "banner ok";
-              healthEl.textContent = "Server ready. Model: " + h.model;
-              recBtn.disabled = false;
-            } else {
-              healthEl.className = "banner bad";
-              healthEl.textContent = "Server problem: " + h.error;
-            }
-          })
-          .catch(function (e) {
-            healthEl.className = "banner bad";
-            healthEl.textContent = "Could not reach the server: " + e;
-          });
-
-        var recorder = null,
-          chunks = [],
-          startedAt = 0,
-          tick = null,
-          stream = null;
-
-        function fmtTime(ms) {
-          var s = Math.floor(ms / 1000);
-          return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
-        }
-
-        recBtn.addEventListener("click", function () {
-          if (recorder && recorder.state === "recording") {
-            stopRec();
-            return;
-          }
-          startRec();
-        });
-
-        function startRec() {
-          navigator.mediaDevices
-            .getUserMedia({ audio: true })
-            .then(function (s) {
-              stream = s;
-              chunks = [];
-              try {
-                recorder = chosenFormat
-                  ? new MediaRecorder(s, {
-                      mimeType: chosenFormat,
-                      audioBitsPerSecond: 32000,
-                    })
-                  : new MediaRecorder(s);
-              } catch (err) {
-                recorder = new MediaRecorder(s);
-              }
-              recorder.ondataavailable = function (e) {
-                if (e.data && e.data.size) chunks.push(e.data);
-              };
-              recorder.onstop = onStop;
-              recorder.start();
-              startedAt = Date.now();
-              recBtn.textContent = "Stop and send";
-              recBtn.className = "stop";
-              stateEl.textContent =
-                "Recording. Pause whenever you like — nothing restarts.";
-              tick = setInterval(function () {
-                timerEl.textContent = fmtTime(Date.now() - startedAt);
-              }, 250);
-            })
-            .catch(function (err) {
-              stateEl.textContent = "Microphone blocked: " + (err && err.name);
-            });
-        }
-
-        function stopRec() {
-          if (recorder && recorder.state === "recording") recorder.stop();
-          if (tick) {
-            clearInterval(tick);
-            tick = null;
-          }
-        }
-
-        function onStop() {
-          if (stream)
-            stream.getTracks().forEach(function (t) {
-              t.stop();
-            });
-          var recordedMs = Date.now() - startedAt;
-          var type =
-            (recorder && recorder.mimeType) || chosenFormat || "audio/webm";
-          var blob = new Blob(chunks, { type: type });
-
-          recBtn.disabled = true;
-          recBtn.textContent = "Sending…";
-          recBtn.className = "primary";
-          stateEl.textContent =
-            "Uploading " + Math.round(blob.size / 1024) + " KB…";
-
-          var reader = new FileReader();
-          reader.onload = function () {
-            var b64 = String(reader.result).split(",")[1] || "";
-            var sentAt = Date.now();
-            fetch("/api/answer", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                audioBase64: b64,
-                mimeType: type,
-                question: qSel.value,
-                model: document.getElementById("model").value || undefined,
-              }),
-            })
-              .then(function (r) {
-                return r.json().then(function (j) {
-                  return { status: r.status, body: j };
-                });
-              })
-              .then(function (res) {
-                show(res, recordedMs, blob.size, type, Date.now() - sentAt);
-              })
-              .catch(function (err) {
-                stateEl.textContent = "Request failed: " + err;
-                recBtn.disabled = false;
-                recBtn.textContent = "Try again";
-              });
-          };
-          reader.onerror = function () {
-            stateEl.textContent = "Could not read the recording.";
-            recBtn.disabled = false;
-            recBtn.textContent = "Try again";
-          };
-          reader.readAsDataURL(blob);
-        }
-
-        function show(res, recordedMs, bytes, type, waitMs) {
-          recBtn.disabled = false;
-          recBtn.textContent = "Record another";
-          var b = res.body || {};
-
-          document.getElementById("result").style.display = "block";
-          if (!b.ok) {
-            stateEl.textContent = "Failed";
-            document.getElementById("transcript").textContent =
-              b.error || "HTTP " + res.status;
-            document.getElementById("followup").textContent = (
-              b.detail || ""
-            ).slice(0, 400);
-          } else {
-            stateEl.textContent = b.valid
-              ? "Done"
-              : "Reply came back in an unexpected shape";
-            document.getElementById("transcript").textContent =
-              b.transcript || "(empty)";
-            document.getElementById("followup").textContent =
-              b.question || b.rawText || "(none)";
-          }
-          document.getElementById("stats").textContent =
-            "Spoke " +
-            Math.round(recordedMs / 1000) +
-            "s · " +
-            Math.round(bytes / 1024) +
-            " KB · waited " +
-            (waitMs / 1000).toFixed(1) +
-            "s" +
-            (b.roundTripMs
-              ? " (upload " +
-                ((waitMs - b.roundTripMs) / 1000).toFixed(1) +
-                "s, model " +
-                (b.roundTripMs / 1000).toFixed(1) +
-                "s)"
-              : "") +
-            " · " +
-            (type || "?") +
-            (b.model ? " · " + b.model : "");
-
-          runs.push({
-            question: qSel.value,
-            recordedSeconds: Math.round(recordedMs / 1000),
-            kilobytes: Math.round(bytes / 1024),
-            waitSeconds: Number((waitMs / 1000).toFixed(1)),
-            formatRecorded: type,
-            formatSent: b.mimeSent || null,
-            model: b.model || null,
-            serverSeconds: b.roundTripMs
-              ? Number((b.roundTripMs / 1000).toFixed(1))
-              : null,
-            uploadSeconds: b.roundTripMs
-              ? Number(((waitMs - b.roundTripMs) / 1000).toFixed(1))
-              : null,
-            thinkingBudget:
-              b.thinkingBudget === undefined ? null : b.thinkingBudget,
-            httpStatus: res.status,
-            validJson: b.valid === true,
-            parseError: b.parseError || null,
-            transcript: b.transcript || null,
-            followUp: b.question || null,
-            error: b.error || null,
-            detail: b.detail ? String(b.detail).slice(0, 300) : null,
-          });
-
-          document.getElementById("reportBox").style.display = "block";
-          document.getElementById("report").value = JSON.stringify(
-            { userAgent: navigator.userAgent, runs: runs },
-            null,
-            2,
-          );
-        }
-
-        document.getElementById("copy").addEventListener("click", function () {
-          var ta = document.getElementById("report");
-          ta.select();
-          var ok = false;
-          try {
-            ok = document.execCommand("copy");
-          } catch (e) {
-            ok = false;
-          }
-          if (!ok && navigator.clipboard) {
-            navigator.clipboard.writeText(ta.value).then(function () {
-              document.getElementById("copy").textContent = "Copied";
-            });
-          } else {
-            document.getElementById("copy").textContent = ok
-              ? "Copied"
-              : "Select and copy manually";
-          }
-        });
-      })();
-    </script>
+    <script src="app.js"></script>
   </body>
 </html>

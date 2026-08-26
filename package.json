@@ -1,8 +1,8 @@
 {
-  "name": "outloud-audio-spike",
+  "name": "outloud",
   "version": "0.1.0",
   "private": true,
-  "description": "Throwaway spike: does sending recorded audio to Gemini beat the browser speech recogniser?",
+  "description": "A private AI speaking partner for job seekers who freeze when they have to speak English.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
@@ -11,6 +11,6 @@
     "node": ">=18"
   },
   "dependencies": {
-    "express": "^4.22.2"
+    "express": "^4.19.2"
   }
 }

@@ -1,7 +1,7 @@
-// OutLoud — audio spike server.
-// Purpose: find out whether sending recorded audio to Gemini gives a better
-// transcript than the browser recogniser, how long it takes on mobile data,
-// and whether the free tier accepts it. Throwaway apart from the patterns.
+// OutLoud — practice server.
+// One AI call per spoken turn, one at the end for feedback.
+// Every AI response is treated as untrusted: validated, retried once, then a
+// static fallback so a bad API moment never ends a user's session.
 
 const express = require("express");
 const path = require("path");
@@ -11,212 +11,131 @@ const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.GEMINI_API_KEY;
 const BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-// Audio arrives base64-encoded, so the body is roughly a third larger than the file.
+// Pinned deliberately. Measured 26 Aug 2026: flash-lite 2.8s, 3.6-flash 4.8-9.9s,
+// 3.5-flash 16s and truncated JSON, 3.7-flash 74s and a 503. Newest is not best,
+// and an unpinned model means latency can change without a code change.
+const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 15000);
+const TURNS = 4;
+
 app.use(express.json({ limit: "25mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 
-// Model names change. Rather than hardcode one that may not exist on this key,
-// ask Google what the key can actually use and cache the answer.
-let cachedModel = null;
+// --- Scenarios: one source of truth, served to the client ---------------------
 
-async function pickModel() {
-  if (process.env.GEMINI_MODEL) return process.env.GEMINI_MODEL;
-  if (cachedModel) return cachedModel;
+const SCENARIOS = [
+  {
+    id: "intro",
+    title: "Introduce yourself",
+    blurb: "The question every interview starts with.",
+    opening: "To start, tell me a little about yourself.",
+    fallbacks: [
+      "What did you enjoy most about that?",
+      "Can you tell me more about one thing you mentioned?",
+      "What would you like an interviewer to remember about you?",
+    ],
+  },
+  {
+    id: "fresher",
+    title: "Fresher job interview",
+    blurb: "General questions for your first or second job.",
+    opening: "Why are you interested in this kind of role?",
+    fallbacks: [
+      "What part of that work would suit you best?",
+      "Tell me about a time you had to learn something quickly.",
+      "What would you want to get better at in your first year?",
+    ],
+  },
+  {
+    id: "project",
+    title: "Something you built",
+    blurb: "Talk through your own work out loud.",
+    opening: "Tell me about something you built or worked on.",
+    fallbacks: [
+      "What was the hardest part of it?",
+      "What would you do differently if you started again?",
+      "What did you learn from doing it?",
+    ],
+  },
+];
 
-  const res = await fetch(`${BASE}/models`, {
-    headers: { "x-goog-api-key": API_KEY },
-  });
-  if (!res.ok) {
-    throw new Error(
-      `Could not list models (HTTP ${res.status}). ${await res.text()}`,
-    );
+const FALLBACK_FEEDBACK = {
+  strength:
+    "You kept speaking through the whole session. That is the part most people avoid, and you did it.",
+  improvement:
+    "Next time, try adding one more sentence of detail to your first answer.",
+  retry_question: "Try your first answer again, in about thirty seconds.",
+};
+
+function scenarioById(id) {
+  for (let i = 0; i < SCENARIOS.length; i++) {
+    if (SCENARIOS[i].id === id) return SCENARIOS[i];
   }
-  const data = await res.json();
-  const usable = (data.models || []).filter(
-    (m) =>
-      Array.isArray(m.supportedGenerationMethods) &&
-      m.supportedGenerationMethods.indexOf("generateContent") !== -1,
-  );
-
-  // Listed does not mean usable: Google keeps retired models in the list and
-  // returns 404 for accounts that never used them. Prefer the newest version.
-  function version(name) {
-    const m = /gemini-(\d+)(?:\.(\d+))?/i.exec(name);
-    if (!m) return -1;
-    return parseInt(m[1], 10) * 100 + (m[2] ? parseInt(m[2], 10) : 0);
-  }
-
-  const flash = usable
-    .filter((m) => /flash/i.test(m.name))
-    .filter(
-      (m) => !/thinking|image|tts|live|audio-native|embedding/i.test(m.name),
-    )
-    .sort((a, b) => {
-      const v = version(b.name) - version(a.name);
-      if (v !== 0) return v;
-      // At equal version, plain beats lite and preview.
-      const penalty = (n) =>
-        (/lite/i.test(n) ? 2 : 0) + (/preview|exp/i.test(n) ? 1 : 0);
-      return penalty(a.name) - penalty(b.name);
-    });
-
-  const chosen = flash[0] || usable[0];
-  if (!chosen)
-    throw new Error("No model on this key supports generateContent.");
-  cachedModel = chosen.name.replace(/^models\//, "");
-  return cachedModel;
+  return null;
 }
 
-app.get("/api/health", async (req, res) => {
-  if (!API_KEY) {
-    return res
-      .status(500)
-      .json({ ok: false, error: "GEMINI_API_KEY is not set." });
-  }
-  try {
-    const model = await pickModel();
-    res.json({ ok: true, model });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: String(err.message || err) });
-  }
+app.get("/api/scenarios", (req, res) => {
+  res.json({
+    turns: TURNS,
+    scenarios: SCENARIOS.map((s) => ({
+      id: s.id,
+      title: s.title,
+      blurb: s.blurb,
+      opening: s.opening,
+    })),
+  });
 });
 
-const SYSTEM = [
-  "You are running a short practice job interview for a nervous Indian job seeker",
-  "who reads and writes English well but is anxious about speaking it.",
-  "",
-  "You are given the question that was just asked and an audio recording of the answer.",
-  "",
-  "Do two things:",
-  "1. Transcribe the answer exactly as spoken. Do not correct grammar, do not tidy it up.",
-  "   Do your best with names of people, companies, colleges and technical terms.",
-  "2. Ask one short follow-up question, under 25 spoken words, built on something specific",
-  "   the person actually said.",
-  "",
-  "Never correct their English. Never evaluate the answer. Never ask more than one question.",
-  "Refer to what they talked about, not their exact wording, because the recording may be unclear.",
-  "If the audio is silent or unintelligible, set transcript to an empty string and ask a simpler",
-  "version of the same question.",
-  "",
-  'Return only JSON: {"transcript": string, "question": string}',
-].join("\n");
+app.get("/api/health", (req, res) => {
+  res.json({ ok: Boolean(API_KEY), model: MODEL, turns: TURNS });
+});
 
-app.post("/api/answer", async (req, res) => {
-  const started = Date.now();
+// --- Gemini plumbing ----------------------------------------------------------
 
-  if (!API_KEY) {
-    return res
-      .status(500)
-      .json({ ok: false, error: "GEMINI_API_KEY is not set on the server." });
-  }
-
-  const {
-    audioBase64,
-    mimeType,
-    question,
-    model: requestedModel,
-  } = req.body || {};
-  if (typeof audioBase64 !== "string" || audioBase64.length < 100) {
-    return res.status(400).json({ ok: false, error: "No audio received." });
-  }
-  if (typeof mimeType !== "string" || !mimeType) {
-    return res.status(400).json({ ok: false, error: "No mime type received." });
-  }
-
-  // Spike only: let the page choose a model so several can be timed without a
-  // redeploy. Allowlisted so a request cannot point the server at anything.
-  const ALLOWED = [
-    "gemini-3.7-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-  ];
-
-  let model;
-  if (requestedModel && ALLOWED.indexOf(requestedModel) !== -1) {
-    model = requestedModel;
-  } else {
-    try {
-      model = await pickModel();
-    } catch (err) {
-      return res
-        .status(500)
-        .json({ ok: false, error: String(err.message || err) });
-    }
-  }
-
-  // MediaRecorder reports things like "audio/webm;codecs=opus". Gemini wants the
-  // bare type. Whether it accepts webm at all is one of the things being tested.
-  const cleanMime = mimeType.split(";")[0].trim();
-
-  const body = {
-    systemInstruction: { parts: [{ text: SYSTEM }] },
-    contents: [
-      {
-        role: "user",
-        parts: [
-          {
-            text: `The question asked was: "${question || "Tell me about yourself."}"`,
-          },
-          { inlineData: { mimeType: cleanMime, data: audioBase64 } },
-        ],
-      },
-    ],
-    generationConfig: {
-      responseMimeType: "application/json",
-      temperature: 0.7,
-      maxOutputTokens: 700,
-    },
-  };
-
-  // Newer Gemini models reason before answering, which costs seconds the product
-  // cannot spare. Whether this field is accepted by this model is untested, so it
-  // is only sent when explicitly configured, and any rejection is surfaced.
-  var thinkingBudget = null;
-  if (
-    process.env.GEMINI_THINKING_BUDGET !== undefined &&
-    process.env.GEMINI_THINKING_BUDGET !== ""
-  ) {
-    thinkingBudget = parseInt(process.env.GEMINI_THINKING_BUDGET, 10);
-    if (!isNaN(thinkingBudget)) {
-      body.generationConfig.thinkingConfig = { thinkingBudget: thinkingBudget };
-    }
-  }
-
-  let apiRes, raw;
+async function callGemini(systemText, parts) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    apiRes = await fetch(`${BASE}/models/${model}:generateContent`, {
+    const res = await fetch(`${BASE}/models/${MODEL}:generateContent`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "x-goog-api-key": API_KEY,
       },
-      body: JSON.stringify(body),
+      signal: controller.signal,
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: systemText }] },
+        contents: [{ role: "user", parts: parts }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          temperature: 0.8,
+          maxOutputTokens: 1200,
+        },
+      }),
     });
-    raw = await apiRes.text();
+    const raw = await res.text();
+    if (!res.ok)
+      return {
+        ok: false,
+        reason: `HTTP ${res.status}`,
+        raw: raw.slice(0, 400),
+      };
+    return { ok: true, raw };
   } catch (err) {
-    return res.status(502).json({
+    const aborted = err && err.name === "AbortError";
+    return {
       ok: false,
-      error: "Could not reach Gemini: " + String(err.message || err),
-    });
+      reason: aborted ? "timeout" : String(err.message || err),
+    };
+  } finally {
+    clearTimeout(timer);
   }
+}
 
-  if (!apiRes.ok) {
-    return res.status(apiRes.status).json({
-      ok: false,
-      error: `Gemini returned HTTP ${apiRes.status}`,
-      model,
-      mimeSent: cleanMime,
-      thinkingBudget: thinkingBudget,
-      detail: raw.slice(0, 1200),
-    });
-  }
-
-  // Everything below treats the response as untrusted, per the project's AI rules.
-  let parsed = null,
-    text = "",
-    parseError = null;
+// Models sometimes wrap JSON in code fences, and truncate it when they run long.
+// gemini-3.5-flash returned an unterminated string during testing, so nothing
+// here assumes the response parses.
+function extractJson(raw) {
   try {
     const envelope = JSON.parse(raw);
     const parts =
@@ -225,39 +144,213 @@ app.post("/api/answer", async (req, res) => {
       envelope.candidates[0] &&
       envelope.candidates[0].content &&
       envelope.candidates[0].content.parts;
-    text = Array.isArray(parts) ? parts.map((p) => p.text || "").join("") : "";
+    const text = Array.isArray(parts)
+      ? parts.map((p) => p.text || "").join("")
+      : "";
     const cleaned = text
       .replace(/^```(?:json)?/i, "")
       .replace(/```$/, "")
       .trim();
-    parsed = JSON.parse(cleaned);
+    return JSON.parse(cleaned);
   } catch (err) {
-    parseError = String(err.message || err);
+    return null;
+  }
+}
+
+function nonEmpty(v) {
+  return typeof v === "string" && v.trim().length > 0;
+}
+
+// Two attempts, then the caller falls back to static content.
+async function askGemini(systemText, parts, validate) {
+  let lastReason = null;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await callGemini(systemText, parts);
+    if (!res.ok) {
+      lastReason = res.reason;
+      continue;
+    }
+    const parsed = extractJson(res.raw);
+    if (parsed && validate(parsed)) return { ok: true, data: parsed };
+    lastReason = parsed ? "missing fields" : "unparseable";
+  }
+  return { ok: false, reason: lastReason };
+}
+
+// --- Turn: the user has spoken, ask the next question -------------------------
+
+const TURN_SYSTEM = [
+  "You are running a short practice job interview for a nervous Indian job seeker",
+  "who reads and writes English well but is anxious about speaking it.",
+  "Your job is to keep them speaking, not to teach English.",
+  "",
+  "You are given the question just asked and an audio recording of their answer.",
+  "",
+  "1. Transcribe the answer as spoken. Do not correct grammar or tidy it up.",
+  "2. Ask one short follow-up question, under 25 spoken words, built on something",
+  "   specific they actually said.",
+  "",
+  "Never correct grammar, pronunciation, accent or vocabulary. Never evaluate the",
+  "answer. Never give advice. Never ask more than one question.",
+  "",
+  "Refer to what they talked about, not their exact wording. Speech recognition",
+  "misheard names and technical terms in testing, and quoting a misheard word back",
+  "would embarrass the person for a mistake they did not make.",
+  "",
+  "If the audio is silent or unintelligible, set transcript to an empty string and",
+  "ask a simpler version of the same question without commenting on it.",
+  "",
+  'Return only JSON: {"transcript": string, "question": string}',
+].join("\n");
+
+app.post("/api/turn", async (req, res) => {
+  const { scenarioId, turn, question, audioBase64, mimeType, history } =
+    req.body || {};
+  const scenario = scenarioById(scenarioId);
+
+  if (!scenario)
+    return res.status(400).json({ ok: false, error: "Unknown scenario." });
+  if (!API_KEY)
+    return res
+      .status(500)
+      .json({ ok: false, error: "Server is not configured." });
+
+  const turnIndex = Number(turn) || 1;
+  const fallbackQuestion =
+    scenario.fallbacks[Math.min(turnIndex - 1, scenario.fallbacks.length - 1)];
+
+  if (typeof audioBase64 !== "string" || audioBase64.length < 100) {
+    return res.status(400).json({ ok: false, error: "No audio received." });
   }
 
-  const valid =
-    parsed &&
-    typeof parsed.transcript === "string" &&
-    typeof parsed.question === "string" &&
-    parsed.question.trim().length > 0;
+  const priorLines = Array.isArray(history)
+    ? history
+        .filter((h) => h && nonEmpty(h.question))
+        .map(
+          (h) =>
+            `Asked: ${h.question}\nThey said: ${h.transcript || "(unclear)"}`,
+        )
+        .join("\n\n")
+    : "";
+
+  const parts = [
+    {
+      text:
+        (priorLines ? `Earlier in this session:\n${priorLines}\n\n` : "") +
+        `The question just asked was: "${question || scenario.opening}"`,
+    },
+    {
+      inlineData: {
+        mimeType: String(mimeType || "")
+          .split(";")[0]
+          .trim(),
+        data: audioBase64,
+      },
+    },
+  ];
+
+  const result = await askGemini(
+    TURN_SYSTEM,
+    parts,
+    (d) => typeof d.transcript === "string" && nonEmpty(d.question),
+  );
+
+  if (result.ok) {
+    return res.json({
+      ok: true,
+      transcript: result.data.transcript,
+      question: result.data.question,
+      fallback: false,
+    });
+  }
+
+  // The session continues on a pre-written question rather than ending.
+  res.json({
+    ok: true,
+    transcript: "",
+    question: fallbackQuestion,
+    fallback: true,
+    reason: result.reason,
+  });
+});
+
+// --- Feedback: one strength, one improvement, one retry -----------------------
+
+const FEEDBACK_SYSTEM = [
+  "You are giving end-of-practice feedback to a nervous job seeker who has just",
+  "finished a spoken interview practice session in English.",
+  "Your goal is that they want to practice again today.",
+  "",
+  "Give exactly one specific strength, drawn from what they actually said, not",
+  "generic praise. Give exactly one improvement, and only one, phrased as something",
+  "to try rather than something they did wrong. Give one short retry instruction",
+  "naming which question to answer again.",
+  "",
+  "Never mention grammar, accent, pronunciation, filler words or vocabulary.",
+  "Never give a score, grade or rating. Never say they failed or would not get the",
+  "job. Keep each field under 30 words. Write at a plain English reading level.",
+  "",
+  "The transcript comes from speech recognition and may contain mistakes. Never",
+  "comment on odd wording, and never quote them word for word.",
+  "",
+  "If the transcript is too short or unclear to judge, still give an encouraging",
+  "strength about having spoken, and make the improvement about giving one more",
+  "sentence of detail next time.",
+  "",
+  'Return only JSON: {"strength": string, "improvement": string, "retry_question": string}',
+].join("\n");
+
+app.post("/api/feedback", async (req, res) => {
+  const { scenarioId, history } = req.body || {};
+  const scenario = scenarioById(scenarioId);
+
+  if (!scenario)
+    return res.status(400).json({ ok: false, error: "Unknown scenario." });
+  if (!API_KEY)
+    return res.json({ ok: true, fallback: true, ...FALLBACK_FEEDBACK });
+
+  const lines = Array.isArray(history)
+    ? history
+        .filter((h) => h && nonEmpty(h.question))
+        .map(
+          (h) =>
+            `Asked: ${h.question}\nThey said: ${h.transcript || "(unclear)"}`,
+        )
+        .join("\n\n")
+    : "";
+
+  if (!lines) {
+    return res.json({ ok: true, fallback: true, ...FALLBACK_FEEDBACK });
+  }
+
+  const result = await askGemini(
+    FEEDBACK_SYSTEM,
+    [{ text: `Practice scenario: ${scenario.title}\n\n${lines}` }],
+    (d) =>
+      nonEmpty(d.strength) &&
+      nonEmpty(d.improvement) &&
+      nonEmpty(d.retry_question),
+  );
+
+  if (result.ok) {
+    return res.json({
+      ok: true,
+      fallback: false,
+      strength: result.data.strength,
+      improvement: result.data.improvement,
+      retry_question: result.data.retry_question,
+    });
+  }
 
   res.json({
     ok: true,
-    model,
-    mimeSent: cleanMime,
-    thinkingBudget: thinkingBudget,
-    bytesSent: Math.round((audioBase64.length * 3) / 4),
-    roundTripMs: Date.now() - started,
-    valid: Boolean(valid),
-    transcript: valid ? parsed.transcript : "",
-    question: valid ? parsed.question : "",
-    parseError,
-    rawText: valid ? undefined : text.slice(0, 1200),
+    fallback: true,
+    reason: result.reason,
+    ...FALLBACK_FEEDBACK,
   });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`OutLoud spike listening on ${PORT}`);
-  if (!API_KEY)
-    console.log("WARNING: GEMINI_API_KEY is not set. Requests will fail.");
+  console.log(`OutLoud on ${PORT}, model ${MODEL}`);
+  if (!API_KEY) console.log("WARNING: GEMINI_API_KEY is not set.");
 });
