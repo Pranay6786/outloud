@@ -37,10 +37,29 @@ async function pickModel() {
       Array.isArray(m.supportedGenerationMethods) &&
       m.supportedGenerationMethods.indexOf("generateContent") !== -1,
   );
-  // Prefer a flash-class model: cheapest and fastest, which is what the product needs.
-  const flash = usable.filter(
-    (m) => /flash/i.test(m.name) && !/thinking|image|tts|live/i.test(m.name),
-  );
+
+  // Listed does not mean usable: Google keeps retired models in the list and
+  // returns 404 for accounts that never used them. Prefer the newest version.
+  function version(name) {
+    const m = /gemini-(\d+)(?:\.(\d+))?/i.exec(name);
+    if (!m) return -1;
+    return parseInt(m[1], 10) * 100 + (m[2] ? parseInt(m[2], 10) : 0);
+  }
+
+  const flash = usable
+    .filter((m) => /flash/i.test(m.name))
+    .filter(
+      (m) => !/thinking|image|tts|live|audio-native|embedding/i.test(m.name),
+    )
+    .sort((a, b) => {
+      const v = version(b.name) - version(a.name);
+      if (v !== 0) return v;
+      // At equal version, plain beats lite and preview.
+      const penalty = (n) =>
+        (/lite/i.test(n) ? 2 : 0) + (/preview|exp/i.test(n) ? 1 : 0);
+      return penalty(a.name) - penalty(b.name);
+    });
+
   const chosen = flash[0] || usable[0];
   if (!chosen)
     throw new Error("No model on this key supports generateContent.");
