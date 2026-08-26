@@ -110,7 +110,12 @@ app.post("/api/answer", async (req, res) => {
       .json({ ok: false, error: "GEMINI_API_KEY is not set on the server." });
   }
 
-  const { audioBase64, mimeType, question } = req.body || {};
+  const {
+    audioBase64,
+    mimeType,
+    question,
+    model: requestedModel,
+  } = req.body || {};
   if (typeof audioBase64 !== "string" || audioBase64.length < 100) {
     return res.status(400).json({ ok: false, error: "No audio received." });
   }
@@ -118,13 +123,27 @@ app.post("/api/answer", async (req, res) => {
     return res.status(400).json({ ok: false, error: "No mime type received." });
   }
 
+  // Spike only: let the page choose a model so several can be timed without a
+  // redeploy. Allowlisted so a request cannot point the server at anything.
+  const ALLOWED = [
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
+  ];
+
   let model;
-  try {
-    model = await pickModel();
-  } catch (err) {
-    return res
-      .status(500)
-      .json({ ok: false, error: String(err.message || err) });
+  if (requestedModel && ALLOWED.indexOf(requestedModel) !== -1) {
+    model = requestedModel;
+  } else {
+    try {
+      model = await pickModel();
+    } catch (err) {
+      return res
+        .status(500)
+        .json({ ok: false, error: String(err.message || err) });
+    }
   }
 
   // MediaRecorder reports things like "audio/webm;codecs=opus". Gemini wants the
@@ -177,10 +196,12 @@ app.post("/api/answer", async (req, res) => {
     });
     raw = await apiRes.text();
   } catch (err) {
-    return res.status(502).json({
-      ok: false,
-      error: "Could not reach Gemini: " + String(err.message || err),
-    });
+    return res
+      .status(502)
+      .json({
+        ok: false,
+        error: "Could not reach Gemini: " + String(err.message || err),
+      });
   }
 
   if (!apiRes.ok) {
