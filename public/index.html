@@ -360,6 +360,46 @@
       .hidden {
         display: none;
       }
+
+      .loading-line {
+        font-size: 14px;
+        color: var(--ink-soft);
+        margin: 0 0 16px;
+      }
+      .skeleton {
+        margin: 0 0 18px;
+      }
+      .skeleton span {
+        display: block;
+        height: 13px;
+        border-radius: 6px;
+        background: var(--mist);
+        margin-bottom: 9px;
+        animation: pulse 1.5s ease-in-out infinite;
+      }
+      .skeleton span.short {
+        width: 58%;
+      }
+      .skeleton span:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .skeleton span:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 0.55;
+        }
+        50% {
+          opacity: 1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .skeleton span {
+          animation: none;
+        }
+      }
     </style>
   </head>
   <body>
@@ -456,13 +496,23 @@
         </div>
         <p class="done-label">Session complete</p>
         <p class="done-meta" id="fb-meta">—</p>
-        <div class="card worked">
-          <h3>What worked</h3>
-          <p id="fb-strength">…</p>
+        <div id="fb-loading">
+          <p class="loading-line">Reading back what you said</p>
+          <div class="skeleton">
+            <span></span><span></span><span class="short"></span>
+          </div>
+          <div class="skeleton"><span></span><span class="short"></span></div>
         </div>
-        <div class="card next">
-          <h3>Try this next time</h3>
-          <p id="fb-improvement">…</p>
+
+        <div id="fb-cards" class="hidden">
+          <div class="card worked">
+            <h3>What worked</h3>
+            <p id="fb-strength">…</p>
+          </div>
+          <div class="card next">
+            <h3>Try this next time</h3>
+            <p id="fb-improvement">…</p>
+          </div>
         </div>
         <button class="btn primary" id="fb-retry">Try that answer again</button>
         <button class="btn" id="fb-done">Done for today</button>

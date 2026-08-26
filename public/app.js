@@ -138,11 +138,29 @@
     TURNS = 4;
   var session = null;
 
+  // Never open with the sentence this scenario used last time. Without this, the
+  // fourth session feels like the first and there is no reason to come back.
+  function chooseOpening(scenario) {
+    var pool = scenario.openings || [];
+    if (pool.length === 0) return "Tell me about yourself.";
+    if (pool.length === 1) return pool[0];
+    var s = store.read();
+    var seen = s.lastOpening || {};
+    var fresh = pool.filter(function (q) {
+      return q !== seen[scenario.id];
+    });
+    var pick = fresh[Math.floor(Math.random() * fresh.length)];
+    seen[scenario.id] = pick;
+    s.lastOpening = seen;
+    store.write(s);
+    return pick;
+  }
+
   function newSession(scenario) {
     return {
       scenario: scenario,
       turn: 1,
-      question: scenario.opening,
+      question: chooseOpening(scenario),
       history: [],
       startedAt: Date.now(),
       retrying: false,
@@ -297,9 +315,7 @@
     $("fb-scenario").textContent = session.scenario.title;
     $("fb-meta").textContent =
       session.history.length + " answers · about " + mins + " min";
-    $("fb-strength").textContent = "…";
-    $("fb-improvement").textContent = "…";
-    $("fb-retry").disabled = true;
+    setFeedbackLoading(true);
     show("s-feedback");
 
     // A completed session is 3 or more spoken turns plus reaching this screen.
@@ -332,8 +348,17 @@
     retry_question: "Try your first answer again, in about thirty seconds.",
   };
 
+  function setFeedbackLoading(on) {
+    $("fb-loading").classList.toggle("hidden", !on);
+    $("fb-cards").classList.toggle("hidden", on);
+    $("fb-retry").disabled = on;
+    $("fb-retry").classList.toggle("hidden", on);
+    $("fb-done").classList.toggle("hidden", on);
+  }
+
   function paintFeedback(d) {
     var f = d || SAFE_FEEDBACK;
+    setFeedbackLoading(false);
     $("fb-strength").textContent = f.strength || SAFE_FEEDBACK.strength;
     $("fb-improvement").textContent =
       f.improvement || SAFE_FEEDBACK.improvement;

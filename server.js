@@ -23,12 +23,21 @@ app.use(express.static(path.join(__dirname, "public")));
 
 // --- Scenarios: one source of truth, served to the client ---------------------
 
+// Each scenario has several openings. Practicing the same scenario twice must not
+// start with the same sentence, or the fourth session feels like the first and the
+// user stops coming back. The follow-ups are generated, so varying the opening
+// varies the whole conversation.
 const SCENARIOS = [
   {
     id: "intro",
     title: "Introduce yourself",
     blurb: "The question every interview starts with.",
-    opening: "To start, tell me a little about yourself.",
+    openings: [
+      "To start, tell me a little about yourself.",
+      "Walk me through your background in your own words.",
+      "How would you describe what you do to someone who has never met you?",
+      "Tell me about yourself, and where you are in your career right now.",
+    ],
     fallbacks: [
       "What did you enjoy most about that?",
       "Can you tell me more about one thing you mentioned?",
@@ -39,7 +48,12 @@ const SCENARIOS = [
     id: "fresher",
     title: "Fresher job interview",
     blurb: "General questions for your first or second job.",
-    opening: "Why are you interested in this kind of role?",
+    openings: [
+      "Why are you interested in this kind of role?",
+      "What made you apply for this job?",
+      "What kind of work are you hoping to do next?",
+      "Why do you think this role would suit you?",
+    ],
     fallbacks: [
       "What part of that work would suit you best?",
       "Tell me about a time you had to learn something quickly.",
@@ -50,7 +64,12 @@ const SCENARIOS = [
     id: "project",
     title: "Something you built",
     blurb: "Talk through your own work out loud.",
-    opening: "Tell me about something you built or worked on.",
+    openings: [
+      "Tell me about something you built or worked on.",
+      "Pick a project you are proud of and walk me through it.",
+      "What is the most interesting thing you have worked on?",
+      "Describe something you made, and why you made it.",
+    ],
     fallbacks: [
       "What was the hardest part of it?",
       "What would you do differently if you started again?",
@@ -81,7 +100,7 @@ app.get("/api/scenarios", (req, res) => {
       id: s.id,
       title: s.title,
       blurb: s.blurb,
-      opening: s.opening,
+      openings: s.openings,
     })),
   });
 });
@@ -237,7 +256,7 @@ app.post("/api/turn", async (req, res) => {
     {
       text:
         (priorLines ? `Earlier in this session:\n${priorLines}\n\n` : "") +
-        `The question just asked was: "${question || scenario.opening}"`,
+        `The question just asked was: "${question || scenario.openings[0]}"`,
     },
     {
       inlineData: {
