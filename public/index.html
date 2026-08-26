@@ -409,8 +409,16 @@
             "s · " +
             Math.round(bytes / 1024) +
             " KB · waited " +
-            Math.round(waitMs / 1000) +
-            "s · " +
+            (waitMs / 1000).toFixed(1) +
+            "s" +
+            (b.roundTripMs
+              ? " (upload " +
+                ((waitMs - b.roundTripMs) / 1000).toFixed(1) +
+                "s, model " +
+                (b.roundTripMs / 1000).toFixed(1) +
+                "s)"
+              : "") +
+            " · " +
             (type || "?") +
             (b.model ? " · " + b.model : "");
 
@@ -422,6 +430,14 @@
             formatRecorded: type,
             formatSent: b.mimeSent || null,
             model: b.model || null,
+            serverSeconds: b.roundTripMs
+              ? Number((b.roundTripMs / 1000).toFixed(1))
+              : null,
+            uploadSeconds: b.roundTripMs
+              ? Number(((waitMs - b.roundTripMs) / 1000).toFixed(1))
+              : null,
+            thinkingBudget:
+              b.thinkingBudget === undefined ? null : b.thinkingBudget,
             httpStatus: res.status,
             validJson: b.valid === true,
             parseError: b.parseError || null,

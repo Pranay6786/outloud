@@ -147,9 +147,23 @@ app.post("/api/answer", async (req, res) => {
     generationConfig: {
       responseMimeType: "application/json",
       temperature: 0.7,
-      maxOutputTokens: 800,
+      maxOutputTokens: 700,
     },
   };
+
+  // Newer Gemini models reason before answering, which costs seconds the product
+  // cannot spare. Whether this field is accepted by this model is untested, so it
+  // is only sent when explicitly configured, and any rejection is surfaced.
+  var thinkingBudget = null;
+  if (
+    process.env.GEMINI_THINKING_BUDGET !== undefined &&
+    process.env.GEMINI_THINKING_BUDGET !== ""
+  ) {
+    thinkingBudget = parseInt(process.env.GEMINI_THINKING_BUDGET, 10);
+    if (!isNaN(thinkingBudget)) {
+      body.generationConfig.thinkingConfig = { thinkingBudget: thinkingBudget };
+    }
+  }
 
   let apiRes, raw;
   try {
@@ -163,12 +177,10 @@ app.post("/api/answer", async (req, res) => {
     });
     raw = await apiRes.text();
   } catch (err) {
-    return res
-      .status(502)
-      .json({
-        ok: false,
-        error: "Could not reach Gemini: " + String(err.message || err),
-      });
+    return res.status(502).json({
+      ok: false,
+      error: "Could not reach Gemini: " + String(err.message || err),
+    });
   }
 
   if (!apiRes.ok) {
@@ -177,6 +189,7 @@ app.post("/api/answer", async (req, res) => {
       error: `Gemini returned HTTP ${apiRes.status}`,
       model,
       mimeSent: cleanMime,
+      thinkingBudget: thinkingBudget,
       detail: raw.slice(0, 1200),
     });
   }
@@ -213,6 +226,7 @@ app.post("/api/answer", async (req, res) => {
     ok: true,
     model,
     mimeSent: cleanMime,
+    thinkingBudget: thinkingBudget,
     bytesSent: Math.round((audioBase64.length * 3) / 4),
     roundTripMs: Date.now() - started,
     valid: Boolean(valid),
