@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OutLoud — audio spike</title>
+    <style>
+      :root {
+        --ink: #16262b;
+        --ink-soft: #4c6068;
+        --paper: #f1f4f0;
+        --surface: #fff;
+        --mist: #e1e8e2;
+        --sage: #2f6b57;
+        --warn: #8e3b2f;
+        --line: rgba(22, 38, 43, 0.14);
+        --serif: Georgia, "Times New Roman", serif;
+        --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: var(--ink);
+        font-family: var(--sans);
+        line-height: 1.5;
+      }
+      .wrap {
+        max-width: 520px;
+        margin: 0 auto;
+        padding: 22px 18px 60px;
+      }
+      h1 {
+        font-family: var(--serif);
+        font-weight: 400;
+        font-size: 26px;
+        margin: 0 0 6px;
+      }
+      .sub {
+        color: var(--ink-soft);
+        font-size: 14px;
+        margin: 0 0 18px;
+      }
+      .banner {
+        border-radius: 12px;
+        padding: 12px 14px;
+        font-size: 13.5px;
+        margin: 0 0 16px;
+      }
+      .banner.bad {
+        background: rgba(142, 59, 47, 0.1);
+        border: 1px solid rgba(142, 59, 47, 0.3);
+        color: var(--warn);
+      }
+      .banner.ok {
+        background: var(--mist);
+        border: 1px solid var(--line);
+        color: var(--ink-soft);
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 16px;
+        margin: 0 0 14px;
+      }
+      .q {
+        font-family: var(--serif);
+        font-size: 19px;
+        line-height: 1.35;
+        margin: 0 0 14px;
+      }
+      button {
+        font-family: var(--sans);
+        font-size: 15px;
+        border-radius: 10px;
+        padding: 13px 14px;
+        border: 1px solid var(--sage);
+        width: 100%;
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--sage);
+        color: #fff;
+      }
+      button.stop {
+        background: var(--warn);
+        border-color: var(--warn);
+        color: #fff;
+      }
+      button:disabled {
+        opacity: 0.45;
+      }
+      .timer {
+        font-family: var(--serif);
+        font-size: 34px;
+        text-align: center;
+        margin: 14px 0 4px;
+      }
+      .state {
+        text-align: center;
+        font-size: 14px;
+        color: var(--ink-soft);
+        margin: 0 0 14px;
+      }
+      .label {
+        font-size: 11px;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+        color: var(--ink-soft);
+        margin: 0 0 6px;
+      }
+      .out {
+        white-space: pre-wrap;
+        font-size: 15px;
+        padding: 12px;
+        background: var(--mist);
+        border-radius: 10px;
+      }
+      .meta {
+        font-size: 12.5px;
+        color: var(--ink-soft);
+        margin: 12px 0 0;
+      }
+      select {
+        width: 100%;
+        padding: 11px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        font-size: 15px;
+        margin-bottom: 14px;
+        font-family: var(--sans);
+      }
+      textarea {
+        width: 100%;
+        height: 170px;
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 12px;
+        padding: 12px;
+        border-radius: 10px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Audio spike</h1>
+      <p class="sub">
+        Records your answer, sends the audio itself to the AI, and asks it to
+        transcribe and follow up. No chime, no restarts. We are measuring
+        transcript quality and how long the wait feels.
+      </p>
+
+      <div id="health" class="banner ok">Checking server…</div>
+
+      <select id="question">
+        <option>Tell me about yourself.</option>
+        <option>Tell me about something you built or worked on.</option>
+        <option>Why should we hire you?</option>
+      </select>
+
+      <div class="card">
+        <p class="q" id="qshow">Tell me about yourself.</p>
+        <div class="timer" id="timer">0:00</div>
+        <p class="state" id="state">Not recording</p>
+        <button class="primary" id="rec" disabled>Start recording</button>
+        <p class="meta" id="fmt"></p>
+      </div>
+
+      <div class="card" id="result" style="display: none">
+        <p class="label">Transcript</p>
+        <div class="out" id="transcript"></div>
+        <p class="label" style="margin-top: 16px">Follow-up question</p>
+        <div class="out" id="followup"></div>
+        <p class="meta" id="stats"></p>
+      </div>
+
+      <div id="reportBox" style="display: none">
+        <p class="label">Copy this into the chat</p>
+        <textarea id="report" readonly></textarea>
+        <button class="primary" id="copy" style="margin-top: 10px">
+          Copy results
+        </button>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        "use strict";
+
+        var recBtn = document.getElementById("rec");
+        var stateEl = document.getElementById("state");
+        var timerEl = document.getElementById("timer");
+        var fmtEl = document.getElementById("fmt");
+        var healthEl = document.getElementById("health");
+        var qSel = document.getElementById("question");
+        var qShow = document.getElementById("qshow");
+        var runs = [];
+
+        qSel.addEventListener("change", function () {
+          qShow.textContent = qSel.value;
+        });
+
+        // Gemini's documented audio formats do not include webm. Android browsers
+        // differ in what MediaRecorder produces, so prefer formats most likely to be
+        // accepted and record which one was actually used.
+        var CANDIDATES = [
+          "audio/mp4",
+          "audio/aac",
+          "audio/ogg;codecs=opus",
+          "audio/ogg",
+          "audio/webm;codecs=opus",
+          "audio/webm",
+        ];
+
+        function pickFormat() {
+          if (
+            typeof MediaRecorder === "undefined" ||
+            !MediaRecorder.isTypeSupported
+          )
+            return "";
+          for (var i = 0; i < CANDIDATES.length; i++) {
+            if (MediaRecorder.isTypeSupported(CANDIDATES[i]))
+              return CANDIDATES[i];
+          }
+          return "";
+        }
+
+        var chosenFormat = pickFormat();
+
+        if (!navigator.mediaDevices || typeof MediaRecorder === "undefined") {
+          healthEl.className = "banner bad";
+          healthEl.textContent =
+            "This browser cannot record audio. Open in Chrome on Android.";
+          return;
+        }
+        if (!window.isSecureContext) {
+          healthEl.className = "banner bad";
+          healthEl.textContent =
+            "This page must be served over HTTPS or the microphone will not work.";
+          return;
+        }
+
+        fmtEl.textContent = chosenFormat
+          ? "Recording format: " + chosenFormat
+          : "No preferred format supported; the browser default will be used.";
+
+        fetch("/api/health")
+          .then(function (r) {
+            return r.json();
+          })
+          .then(function (h) {
+            if (h.ok) {
+              healthEl.className = "banner ok";
+              healthEl.textContent = "Server ready. Model: " + h.model;
+              recBtn.disabled = false;
+            } else {
+              healthEl.className = "banner bad";
+              healthEl.textContent = "Server problem: " + h.error;
+            }
+          })
+          .catch(function (e) {
+            healthEl.className = "banner bad";
+            healthEl.textContent = "Could not reach the server: " + e;
+          });
+
+        var recorder = null,
+          chunks = [],
+          startedAt = 0,
+          tick = null,
+          stream = null;
+
+        function fmtTime(ms) {
+          var s = Math.floor(ms / 1000);
+          return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+        }
+
+        recBtn.addEventListener("click", function () {
+          if (recorder && recorder.state === "recording") {
+            stopRec();
+            return;
+          }
+          startRec();
+        });
+
+        function startRec() {
+          navigator.mediaDevices
+            .getUserMedia({ audio: true })
+            .then(function (s) {
+              stream = s;
+              chunks = [];
+              try {
+                recorder = chosenFormat
+                  ? new MediaRecorder(s, {
+                      mimeType: chosenFormat,
+                      audioBitsPerSecond: 32000,
+                    })
+                  : new MediaRecorder(s);
+              } catch (err) {
+                recorder = new MediaRecorder(s);
+              }
+              recorder.ondataavailable = function (e) {
+                if (e.data && e.data.size) chunks.push(e.data);
+              };
+              recorder.onstop = onStop;
+              recorder.start();
+              startedAt = Date.now();
+              recBtn.textContent = "Stop and send";
+              recBtn.className = "stop";
+              stateEl.textContent =
+                "Recording. Pause whenever you like — nothing restarts.";
+              tick = setInterval(function () {
+                timerEl.textContent = fmtTime(Date.now() - startedAt);
+              }, 250);
+            })
+            .catch(function (err) {
+              stateEl.textContent = "Microphone blocked: " + (err && err.name);
+            });
+        }
+
+        function stopRec() {
+          if (recorder && recorder.state === "recording") recorder.stop();
+          if (tick) {
+            clearInterval(tick);
+            tick = null;
+          }
+        }
+
+        function onStop() {
+          if (stream)
+            stream.getTracks().forEach(function (t) {
+              t.stop();
+            });
+          var recordedMs = Date.now() - startedAt;
+          var type =
+            (recorder && recorder.mimeType) || chosenFormat || "audio/webm";
+          var blob = new Blob(chunks, { type: type });
+
+          recBtn.disabled = true;
+          recBtn.textContent = "Sending…";
+          recBtn.className = "primary";
+          stateEl.textContent =
+            "Uploading " + Math.round(blob.size / 1024) + " KB…";
+
+          var reader = new FileReader();
+          reader.onload = function () {
+            var b64 = String(reader.result).split(",")[1] || "";
+            var sentAt = Date.now();
+            fetch("/api/answer", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                audioBase64: b64,
+                mimeType: type,
+                question: qSel.value,
+              }),
+            })
+              .then(function (r) {
+                return r.json().then(function (j) {
+                  return { status: r.status, body: j };
+                });
+              })
+              .then(function (res) {
+                show(res, recordedMs, blob.size, type, Date.now() - sentAt);
+              })
+              .catch(function (err) {
+                stateEl.textContent = "Request failed: " + err;
+                recBtn.disabled = false;
+                recBtn.textContent = "Try again";
+              });
+          };
+          reader.onerror = function () {
+            stateEl.textContent = "Could not read the recording.";
+            recBtn.disabled = false;
+            recBtn.textContent = "Try again";
+          };
+          reader.readAsDataURL(blob);
+        }
+
+        function show(res, recordedMs, bytes, type, waitMs) {
+          recBtn.disabled = false;
+          recBtn.textContent = "Record another";
+          var b = res.body || {};
+
+          document.getElementById("result").style.display = "block";
+          if (!b.ok) {
+            stateEl.textContent = "Failed";
+            document.getElementById("transcript").textContent =
+              b.error || "HTTP " + res.status;
+            document.getElementById("followup").textContent = (
+              b.detail || ""
+            ).slice(0, 400);
+          } else {
+            stateEl.textContent = b.valid
+              ? "Done"
+              : "Reply came back in an unexpected shape";
+            document.getElementById("transcript").textContent =
+              b.transcript || "(empty)";
+            document.getElementById("followup").textContent =
+              b.question || b.rawText || "(none)";
+          }
+          document.getElementById("stats").textContent =
+            "Spoke " +
+            Math.round(recordedMs / 1000) +
+            "s · " +
+            Math.round(bytes / 1024) +
+            " KB · waited " +
+            Math.round(waitMs / 1000) +
+            "s · " +
+            (type || "?") +
+            (b.model ? " · " + b.model : "");
+
+          runs.push({
+            question: qSel.value,
+            recordedSeconds: Math.round(recordedMs / 1000),
+            kilobytes: Math.round(bytes / 1024),
+            waitSeconds: Number((waitMs / 1000).toFixed(1)),
+            formatRecorded: type,
+            formatSent: b.mimeSent || null,
+            model: b.model || null,
+            httpStatus: res.status,
+            validJson: b.valid === true,
+            parseError: b.parseError || null,
+            transcript: b.transcript || null,
+            followUp: b.question || null,
+            error: b.error || null,
+            detail: b.detail ? String(b.detail).slice(0, 300) : null,
+          });
+
+          document.getElementById("reportBox").style.display = "block";
+          document.getElementById("report").value = JSON.stringify(
+            { userAgent: navigator.userAgent, runs: runs },
+            null,
+            2,
+          );
+        }
+
+        document.getElementById("copy").addEventListener("click", function () {
+          var ta = document.getElementById("report");
+          ta.select();
+          var ok = false;
+          try {
+            ok = document.execCommand("copy");
+          } catch (e) {
+            ok = false;
+          }
+          if (!ok && navigator.clipboard) {
+            navigator.clipboard.writeText(ta.value).then(function () {
+              document.getElementById("copy").textContent = "Copied";
+            });
+          } else {
+            document.getElementById("copy").textContent = ok
+              ? "Copied"
+              : "Select and copy manually";
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>
