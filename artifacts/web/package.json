@@ -1,0 +1,13 @@
+{
+  "name": "@workspace/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node src/server.mjs",
+    "start": "node src/server.mjs"
+  },
+  "dependencies": {
+    "express": "^5.2.1"
+  }
+}
