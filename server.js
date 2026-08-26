@@ -60,20 +60,24 @@ const SCENARIOS = [
       "What would you want to get better at in your first year?",
     ],
   },
+  // Replaced "Something you built" on 26 Aug 2026. Work calls and meetings was the
+  // most requested practice situation in the survey at 57.14%, ahead of interview
+  // answers at 50%. The sample skews employed, so this covers the top request
+  // without giving up the interview focus the brief asks for.
   {
-    id: "project",
-    title: "Something you built",
-    blurb: "Talk through your own work out loud.",
+    id: "workcall",
+    title: "A work call or meeting",
+    blurb: "Speaking up when it is not an interview.",
     openings: [
-      "Tell me about something you built or worked on.",
-      "Pick a project you are proud of and walk me through it.",
-      "What is the most interesting thing you have worked on?",
-      "Describe something you made, and why you made it.",
+      "You are in a team meeting. Give a quick update on what you worked on this week.",
+      "A client asks how the work is going. What do you tell them?",
+      "Your manager asks you to explain a problem you ran into. Explain it to me.",
+      "Someone on the call asks you to walk them through what you do. Go ahead.",
     ],
     fallbacks: [
-      "What was the hardest part of it?",
-      "What would you do differently if you started again?",
-      "What did you learn from doing it?",
+      "How would you explain that to someone outside your team?",
+      "What would you say if they asked you to repeat that more simply?",
+      "What is the one thing you would want them to remember?",
     ],
   },
 ];
@@ -235,8 +239,11 @@ app.post("/api/turn", async (req, res) => {
       .json({ ok: false, error: "Server is not configured." });
 
   const turnIndex = Number(turn) || 1;
-  const fallbackQuestion =
-    scenario.fallbacks[Math.min(turnIndex - 1, scenario.fallbacks.length - 1)];
+  const fallbackIndex = Math.max(
+    0,
+    Math.min(turnIndex - 1, scenario.fallbacks.length - 1),
+  );
+  const fallbackQuestion = scenario.fallbacks[fallbackIndex];
 
   if (typeof audioBase64 !== "string" || audioBase64.length < 100) {
     return res.status(400).json({ ok: false, error: "No audio received." });

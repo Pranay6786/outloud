@@ -164,6 +164,8 @@
       history: [],
       startedAt: Date.now(),
       retrying: false,
+      extended: false,
+      pendingQuestion: null,
     };
   }
 
@@ -200,7 +202,9 @@
   function paintQuestion() {
     $("sp-progress").textContent = session.retrying
       ? "One more try"
-      : "Question " + session.turn + " of " + TURNS;
+      : session.turn > TURNS
+        ? "Question " + session.turn
+        : "Question " + session.turn + " of " + TURNS;
     $("sp-question").textContent = session.question;
     setMic("idle", "Tap to answer", "Take your time.");
   }
@@ -288,8 +292,13 @@
           return;
         }
 
+        // Two thirds of surveyed users said a realistic session is five minutes or
+        // more, and four turns runs shorter than that. Rather than making the length
+        // adaptive, which would remove the visible end a nervous user needs, the
+        // session offers to continue once the planned questions are done.
         if (session.turn >= TURNS) {
-          finishSession();
+          session.pendingQuestion = data.question;
+          offerMore();
           return;
         }
 
@@ -305,6 +314,37 @@
         setMic("idle", "Tap to answer", "Take your time.");
       });
   }
+
+  // Bounded so the offer cannot repeat forever.
+  var MAX_TURNS = 8;
+
+  function offerMore() {
+    if (session.history.length >= MAX_TURNS || !session.pendingQuestion) {
+      finishSession();
+      return;
+    }
+    try {
+      window.speechSynthesis && window.speechSynthesis.cancel();
+    } catch (e) {}
+    $("more-scenario").textContent = session.scenario.title;
+    $("more-count").textContent = session.history.length + " answers";
+    show("s-more");
+  }
+
+  $("more-continue").addEventListener("click", function () {
+    session.turn += 1;
+    session.extended = true;
+    session.question = session.pendingQuestion;
+    session.pendingQuestion = null;
+    $("sp-error").classList.add("hidden");
+    paintQuestion();
+    show("s-speak");
+    speak(session.question);
+  });
+
+  $("more-finish").addEventListener("click", function () {
+    finishSession();
+  });
 
   // ---- feedback --------------------------------------------------------------
   function finishSession() {
