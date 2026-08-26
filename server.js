@@ -196,12 +196,10 @@ app.post("/api/answer", async (req, res) => {
     });
     raw = await apiRes.text();
   } catch (err) {
-    return res
-      .status(502)
-      .json({
-        ok: false,
-        error: "Could not reach Gemini: " + String(err.message || err),
-      });
+    return res.status(502).json({
+      ok: false,
+      error: "Could not reach Gemini: " + String(err.message || err),
+    });
   }
 
   if (!apiRes.ok) {
