@@ -494,27 +494,140 @@
       }
       .count {
         display: flex;
-        align-items: baseline;
-        gap: 14px;
-        margin: 0 0 28px;
-        background: var(--surface);
-        border: 1px solid var(--line-soft);
-        border-radius: 16px;
-        padding: 20px 22px;
+        align-items: center;
+        gap: 18px;
+        margin: 0 0 10px;
+        background: linear-gradient(
+          180deg,
+          rgba(47, 107, 87, 0.1),
+          rgba(47, 107, 87, 0.04)
+        );
+        border: 1px solid rgba(47, 107, 87, 0.22);
+        border-radius: 18px;
+        padding: 22px;
         box-shadow: var(--shadow);
+      }
+      .count-ring {
+        width: 46px;
+        height: 46px;
+        flex: none;
+        border-radius: 50%;
+        background: var(--sage);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 6px 16px -8px rgba(36, 82, 67, 0.9);
+      }
+      .count-ring svg {
+        width: 24px;
+        height: 24px;
+        fill: none;
+        stroke: #fff;
+        stroke-width: 2.6;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .count-body {
+        display: flex;
+        align-items: baseline;
+        gap: 11px;
+        flex-wrap: wrap;
       }
       .count b {
         font-family: var(--serif);
-        font-size: 58px;
+        font-size: 52px;
         font-weight: 400;
         line-height: 0.9;
-        color: var(--sage);
+        color: var(--sage-deep);
       }
       .count span {
         font-size: 14px;
         color: var(--ink-soft);
-        max-width: 11ch;
         line-height: 1.35;
+      }
+      .count-note {
+        font-size: 13.5px;
+        color: var(--ink-soft);
+        margin: 0 0 26px;
+      }
+
+      /* --- listening indicator ------------------------------------------------ */
+      .wave {
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        gap: 5px;
+        height: 26px;
+        margin: 22px 0 0;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      .wave span {
+        width: 4px;
+        height: 7px;
+        border-radius: 99px;
+        background: var(--warn);
+        opacity: 0.55;
+      }
+      .mic[data-state="recording"] ~ .wave {
+        opacity: 1;
+      }
+      .mic[data-state="recording"] ~ .wave span {
+        animation: bounce 1.05s ease-in-out infinite;
+      }
+      .mic[data-state="recording"] ~ .wave span:nth-child(2) {
+        animation-delay: 0.13s;
+      }
+      .mic[data-state="recording"] ~ .wave span:nth-child(3) {
+        animation-delay: 0.26s;
+      }
+      .mic[data-state="recording"] ~ .wave span:nth-child(4) {
+        animation-delay: 0.39s;
+      }
+      .mic[data-state="recording"] ~ .wave span:nth-child(5) {
+        animation-delay: 0.26s;
+      }
+      .mic[data-state="recording"] ~ .wave span:nth-child(6) {
+        animation-delay: 0.13s;
+      }
+      .mic[data-state="busy"] ~ .wave {
+        opacity: 1;
+      }
+      .mic[data-state="busy"] ~ .wave span {
+        background: var(--sage);
+        animation: bounce 1.7s ease-in-out infinite;
+      }
+      .mic[data-state="busy"] ~ .wave span:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .mic[data-state="busy"] ~ .wave span:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      .mic[data-state="busy"] ~ .wave span:nth-child(4) {
+        animation-delay: 0.6s;
+      }
+      .mic[data-state="busy"] ~ .wave span:nth-child(5) {
+        animation-delay: 0.8s;
+      }
+      .mic[data-state="busy"] ~ .wave span:nth-child(6) {
+        animation-delay: 1s;
+      }
+      @keyframes bounce {
+        0%,
+        100% {
+          height: 7px;
+          opacity: 0.45;
+        }
+        50% {
+          height: 24px;
+          opacity: 1;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .wave span {
+          animation: none !important;
+          height: 10px;
+        }
       }
       .small {
         font-size: 13px;
@@ -696,6 +809,10 @@
               <path d="M12 18v3" />
             </svg>
           </button>
+          <div class="wave" aria-hidden="true">
+            <span></span><span></span><span></span><span></span><span></span
+            ><span></span><span></span>
+          </div>
           <p class="state" id="sp-state">Tap to answer</p>
           <p class="hint" id="sp-hint">Take your time.</p>
         </div>
@@ -753,11 +870,10 @@
       <!-- 4b. Save progress -->
       <section class="screen" id="s-save">
         <div class="topbar"><span>OutLoud</span><span>Optional</span></div>
-        <h2>Want to keep your progress?</h2>
+        <h2>Nice work. Want to keep this?</h2>
         <p>
-          Leave your name and number and your practice is saved even if you
-          change phone or clear your browser. It is only used to see whether
-          people keep practicing.
+          Leave your name and number, and your practice stays with you even if
+          you clear your browser or switch phones.
         </p>
         <div class="error hidden" id="save-error"></div>
         <label class="field">
@@ -780,11 +896,11 @@
           />
         </label>
         <p class="privacy">
-          Nobody is called or messaged without asking you first. Your number is
-          never shown to anyone else and never sold.
+          We will not call or message you without asking first. Your number is
+          never shared with anyone and never sold.
         </p>
         <button class="btn primary" id="save-submit">Save my progress</button>
-        <button class="btn plain" id="save-skip">Not now</button>
+        <button class="btn plain" id="save-skip">Maybe later</button>
       </section>
 
       <!-- 5. Home -->
@@ -798,8 +914,17 @@
         <div class="topbar"><span>Your practice</span><span></span></div>
         <p class="greet" id="home-greet">Welcome back</p>
         <div class="count">
-          <b id="home-count">0</b><span>sessions completed</span>
+          <div class="count-ring">
+            <svg viewBox="0 0 32 32" aria-hidden="true">
+              <path d="M9 16.5l4.5 4.5L23 11.5" />
+            </svg>
+          </div>
+          <div class="count-body">
+            <b id="home-count">0</b>
+            <span id="home-count-label">sessions completed</span>
+          </div>
         </div>
+        <p class="count-note" id="home-note"></p>
         <button class="btn primary" id="home-again">Practice again</button>
         <p class="small" id="home-last"></p>
         <p class="small">Or pick another</p>
