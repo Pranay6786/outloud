@@ -1,732 +1,721 @@
-// OutLoud — practice server.
-// One AI call per spoken turn, one at the end for feedback.
-// Every AI response is treated as untrusted: validated, retried once, then a
-// static fallback so a bad API moment never ends a user's session.
+(function () {
+  "use strict";
 
-const express = require("express");
-const path = require("path");
+  // ---- tiny helpers ----------------------------------------------------------
+  // A missing element used to throw and kill everything after it, which left the
+  // home screen rendered but its buttons dead. Never again: an unknown id returns
+  // a harmless stand-in and the rest of the screen still works.
+  var MISSING = [];
+  function $(id) {
+    var el = document.getElementById(id);
+    if (el) return el;
+    if (MISSING.indexOf(id) === -1) MISSING.push(id);
+    return {
+      textContent: "",
+      innerHTML: "",
+      value: "",
+      disabled: false,
+      style: {},
+      classList: {
+        add: function () {},
+        remove: function () {},
+        toggle: function () {},
+        contains: function () {
+          return false;
+        },
+      },
+      addEventListener: function () {},
+      setAttribute: function () {},
+      getAttribute: function () {
+        return null;
+      },
+      appendChild: function () {},
+      focus: function () {},
+      querySelector: function () {
+        return null;
+      },
+    };
+  }
 
-// --- storage -----------------------------------------------------------------
-// Optional by design. If DATABASE_URL is absent the app still runs and simply
-// records nothing, because a database problem must never stop someone practicing.
-let pool = null;
-let dbReady = false;
-let dbError = null;
+  function show(screenId) {
+    var all = document.querySelectorAll(".screen");
+    for (var i = 0; i < all.length; i++) all[i].classList.remove("on");
+    $(screenId).classList.add("on");
+    window.scrollTo(0, 0);
+  }
 
-try {
-  if (process.env.DATABASE_URL) {
-    const { Pool } = require("pg");
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: { rejectUnauthorized: false },
-      max: 3,
+  // Sessions live on this phone. No account, nothing sent anywhere on its own.
+  var store = {
+    read: function () {
+      try {
+        return JSON.parse(localStorage.getItem("outloud") || "{}") || {};
+      } catch (e) {
+        return {};
+      }
+    },
+    write: function (obj) {
+      try {
+        localStorage.setItem("outloud", JSON.stringify(obj));
+      } catch (e) {}
+    },
+  };
+
+  // A per-browser id so sessions can be counted without an account. Replaced by a
+  // real identity only if the user chooses to give one.
+  function deviceId() {
+    var st = store.read();
+    if (!st.deviceId) {
+      st.deviceId =
+        "d-" +
+        Date.now().toString(36) +
+        "-" +
+        Math.random().toString(36).slice(2, 10);
+      store.write(st);
+    }
+    return st.deviceId;
+  }
+
+  function recordSession(answersCount, durationMs, extended) {
+    // Fire and forget. A storage failure must never affect the user's session.
+    try {
+      fetch("/api/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: deviceId(),
+          scenarioId: session.scenario.id,
+          answers: answersCount,
+          durationMs: durationMs,
+          extended: Boolean(extended),
+        }),
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
+  // ---- speech out ------------------------------------------------------------
+  // The question is spoken as well as shown. Shown matters more: a noisy room, a
+  // silent phone or a failed voice must never leave the user stuck.
+  function speak(text) {
+    try {
+      if (!window.speechSynthesis) return;
+      window.speechSynthesis.cancel();
+      var u = new SpeechSynthesisUtterance(text);
+      u.rate = 0.95;
+      u.lang = "en-US";
+      window.speechSynthesis.speak(u);
+    } catch (e) {}
+  }
+
+  // ---- recording -------------------------------------------------------------
+  var FORMATS = [
+    "audio/mp4",
+    "audio/aac",
+    "audio/ogg;codecs=opus",
+    "audio/webm;codecs=opus",
+    "audio/webm",
+  ];
+
+  function preferredFormat() {
+    if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported)
+      return "";
+    for (var i = 0; i < FORMATS.length; i++) {
+      if (MediaRecorder.isTypeSupported(FORMATS[i])) return FORMATS[i];
+    }
+    return "";
+  }
+
+  var recorder = null,
+    chunks = [],
+    stream = null,
+    chosen = preferredFormat();
+
+  function startRecording(onFail) {
+    if (!navigator.mediaDevices || typeof MediaRecorder === "undefined") {
+      onFail("This browser cannot record. Try Chrome.");
+      return;
+    }
+    navigator.mediaDevices
+      .getUserMedia({ audio: true })
+      .then(function (s) {
+        stream = s;
+        chunks = [];
+        try {
+          recorder = chosen
+            ? new MediaRecorder(s, {
+                mimeType: chosen,
+                audioBitsPerSecond: 32000,
+              })
+            : new MediaRecorder(s);
+        } catch (e) {
+          recorder = new MediaRecorder(s);
+        }
+        recorder.ondataavailable = function (e) {
+          if (e.data && e.data.size) chunks.push(e.data);
+        };
+        recorder.start();
+      })
+      .catch(function (err) {
+        var name = err && err.name;
+        if (name === "NotAllowedError" || name === "SecurityError") {
+          onFail(
+            "The microphone is blocked. Allow it in your browser settings, then reload.",
+          );
+        } else if (name === "NotFoundError") {
+          onFail("No microphone was found on this device.");
+        } else {
+          onFail("Could not start recording. Try again.");
+        }
+      });
+  }
+
+  function stopRecording(cb) {
+    if (!recorder || recorder.state !== "recording") {
+      cb(null);
+      return;
+    }
+    recorder.onstop = function () {
+      if (stream)
+        stream.getTracks().forEach(function (t) {
+          t.stop();
+        });
+      var type = recorder.mimeType || chosen || "audio/webm";
+      var blob = new Blob(chunks, { type: type });
+      var reader = new FileReader();
+      reader.onload = function () {
+        cb({
+          base64: String(reader.result).split(",")[1] || "",
+          mimeType: type,
+          bytes: blob.size,
+        });
+      };
+      reader.onerror = function () {
+        cb(null);
+      };
+      reader.readAsDataURL(blob);
+    };
+    recorder.stop();
+  }
+
+  // ---- session state ---------------------------------------------------------
+  var scenarios = [],
+    TURNS = 4;
+  var session = null;
+
+  // Never open with the sentence this scenario used last time. Without this, the
+  // fourth session feels like the first and there is no reason to come back.
+  function chooseOpening(scenario) {
+    var pool = scenario.openings || [];
+    if (pool.length === 0) return "Tell me about yourself.";
+    if (pool.length === 1) return pool[0];
+    var s = store.read();
+    var seen = s.lastOpening || {};
+    var fresh = pool.filter(function (q) {
+      return q !== seen[scenario.id];
+    });
+    var pick = fresh[Math.floor(Math.random() * fresh.length)];
+    seen[scenario.id] = pick;
+    s.lastOpening = seen;
+    store.write(s);
+    return pick;
+  }
+
+  function newSession(scenario) {
+    return {
+      scenario: scenario,
+      turn: 1,
+      question: chooseOpening(scenario),
+      history: [],
+      startedAt: Date.now(),
+      retrying: false,
+      recorded: false,
+      extended: false,
+      pendingQuestion: null,
+    };
+  }
+
+  // ---- wiring ----------------------------------------------------------------
+  function renderScenarioList(el, onPick) {
+    renderList(el, scenarios, onPick);
+  }
+
+  function renderList(el, items, onPick) {
+    el.innerHTML = "";
+    items.forEach(function (s) {
+      var li = document.createElement("li");
+      var b = document.createElement("button");
+      b.innerHTML = '<span class="t"></span><span class="b"></span>';
+      b.querySelector(".t").textContent = s.title;
+      b.querySelector(".b").textContent = s.blurb;
+      b.addEventListener("click", function () {
+        onPick(s);
+      });
+      li.appendChild(b);
+      el.appendChild(li);
     });
   }
-} catch (err) {
-  dbError = "pg module not installed: " + String(err.message || err);
-}
 
-async function initDb() {
-  if (!pool) {
-    dbError = dbError || "DATABASE_URL is not set";
-    return;
+  function beginSession(scenario) {
+    session = newSession(scenario);
+    $("sp-scenario").textContent = scenario.title;
+    $("sp-error").classList.add("hidden");
+    paintQuestion();
+    show("s-speak");
+    speak(session.question);
   }
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id         SERIAL PRIMARY KEY,
-        device_id  TEXT UNIQUE NOT NULL,
-        name       TEXT,
-        phone      TEXT,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-      );
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sessions (
-        id          SERIAL PRIMARY KEY,
-        device_id   TEXT NOT NULL,
-        scenario    TEXT,
-        answers     INTEGER NOT NULL DEFAULT 0,
-        duration_ms INTEGER,
-        completed   BOOLEAN NOT NULL DEFAULT false,
-        extended    BOOLEAN NOT NULL DEFAULT false,
-        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
-      );
-    `);
-    await pool.query(
-      `CREATE INDEX IF NOT EXISTS sessions_device_idx ON sessions (device_id);`,
-    );
-    await pool.query(
-      `CREATE INDEX IF NOT EXISTS sessions_created_idx ON sessions (created_at);`,
-    );
-    dbReady = true;
-  } catch (err) {
-    dbError = String(err.message || err);
+
+  function paintQuestion() {
+    $("sp-progress").textContent = session.retrying
+      ? "One more try"
+      : session.turn > TURNS
+        ? "Question " + session.turn
+        : "Question " + session.turn + " of " + TURNS;
+    $("sp-question").textContent = session.question;
+    // Shown on the first question of any session, not only a user's very first.
+    // It states how the product works rather than correcting the person, so it
+    // does not read as nagging, and it disappears from question two onward.
+    var hint =
+      session.turn === 1 && !session.retrying
+        ? "There is no time limit. The more you say, the more it has to ask about."
+        : "Take your time.";
+    setMic("idle", "Tap to answer", hint);
   }
-}
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-const API_KEY = process.env.GEMINI_API_KEY;
-const BASE = "https://generativelanguage.googleapis.com/v1beta";
+  function setMic(state, stateText, hintText) {
+    var mic = $("sp-mic");
+    mic.setAttribute("data-state", state);
+    mic.disabled = state === "busy";
+    $("sp-state").textContent = stateText;
+    $("sp-hint").textContent = hintText || "";
+  }
 
-// Pinned deliberately. Measured 26 Aug 2026: flash-lite 2.8s, 3.6-flash 4.8-9.9s,
-// 3.5-flash 16s and truncated JSON, 3.7-flash 74s and a 503. Newest is not best,
-// and an unpinned model means latency can change without a code change.
-const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
-const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 15000);
-const TURNS = 4;
+  function showError(msg) {
+    var e = $("sp-error");
+    e.textContent = msg;
+    e.classList.remove("hidden");
+  }
 
-app.use(express.json({ limit: "25mb" }));
-app.use(express.static(path.join(__dirname, "public")));
+  $("sp-mic").addEventListener("click", function () {
+    var mic = $("sp-mic");
+    var state = mic.getAttribute("data-state");
 
-// --- Scenarios: one source of truth, served to the client ---------------------
+    if (state === "idle") {
+      $("sp-error").classList.add("hidden");
+      try {
+        window.speechSynthesis && window.speechSynthesis.cancel();
+      } catch (e) {}
+      startRecording(function (msg) {
+        showError(msg);
+        setMic("idle", "Tap to answer", "Take your time.");
+      });
+      setMic("recording", "Listening", "Tap again when you have finished.");
+      return;
+    }
 
-// Each scenario has several openings. Practicing the same scenario twice must not
-// start with the same sentence, or the fourth session feels like the first and the
-// user stops coming back. The follow-ups are generated, so varying the opening
-// varies the whole conversation.
-const SCENARIOS = [
-  {
-    id: "intro",
-    title: "Introduce yourself",
-    blurb: "The question every interview starts with.",
-    openings: [
-      "To start, tell me a little about yourself.",
-      "Walk me through your background in your own words.",
-      "How would you describe what you do to someone who has never met you?",
-      "Tell me about yourself, and where you are in your career right now.",
-    ],
-    fallbacks: [
-      "What did you enjoy most about that?",
-      "Can you tell me more about one thing you mentioned?",
-      "What would you like an interviewer to remember about you?",
-      "What are you hoping to do next?",
-      "What is something you are good at that people do not notice?",
-      "How would a colleague describe working with you?",
-    ],
-  },
-  {
-    id: "fresher",
-    title: "Fresher job interview",
-    blurb: "General questions for your first or second job.",
-    openings: [
-      "Why are you interested in this kind of role?",
-      "What made you apply for this job?",
-      "What kind of work are you hoping to do next?",
-      "Why do you think this role would suit you?",
-    ],
-    fallbacks: [
-      "What part of that work would suit you best?",
-      "Tell me about a time you had to learn something quickly.",
-      "What would you want to get better at in your first year?",
-      "What kind of team do you work well in?",
-      "Tell me about a time something did not go to plan.",
-      "What questions would you want to ask us?",
-    ],
-  },
-  // Replaced "Something you built" on 26 Aug 2026. Work calls and meetings was the
-  // most requested practice situation in the survey at 57.14%, ahead of interview
-  // answers at 50%. The sample skews employed, so this covers the top request
-  // without giving up the interview focus the brief asks for.
-  {
-    id: "workcall",
-    title: "A work call or meeting",
-    blurb: "Speaking up when it is not an interview.",
-    openings: [
-      "You are in a team meeting. Give a quick update on what you worked on this week.",
-      "A client asks how the work is going. What do you tell them?",
-      "Your manager asks you to explain a problem you ran into. Explain it to me.",
-      "Someone on the call asks you to walk them through what you do. Go ahead.",
-    ],
-    fallbacks: [
-      "How would you explain that to someone outside your team?",
-      "What would you say if they asked you to repeat that more simply?",
-      "What is the one thing you would want them to remember?",
-      "How would you tell them about a delay?",
-      "How would you disagree with something said on that call?",
-      "What would you say if you did not know the answer?",
-    ],
-  },
-];
+    if (state === "recording") {
+      setMic("busy", "Thinking about your answer", "This takes a few seconds.");
+      stopRecording(function (audio) {
+        if (!audio || audio.base64.length < 100) {
+          showError(
+            "Nothing was recorded. Check the microphone and try again.",
+          );
+          setMic("idle", "Tap to answer", "Take your time.");
+          return;
+        }
+        sendTurn(audio);
+      });
+    }
+  });
 
-// Used only when a scenario's own fallbacks have all been asked, which is possible
-// once a session can be extended to eight answers.
-const GENERIC_FALLBACKS = [
-  "What else would you want them to know?",
-  "Can you say a bit more about that?",
-  "What would you add if you had more time?",
-  "What is the most important part of what you just said?",
-];
+  function sendTurn(audio) {
+    var askedQuestion = session.question;
 
-// A pool rather than one message. Validation now rejects feedback that repeats an
-// earlier session, which means the fallback runs more often — and a single fixed
-// fallback would reintroduce the repetition it exists to prevent.
-const FALLBACK_FEEDBACK_POOL = [
-  {
+    fetch("/api/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scenarioId: session.scenario.id,
+        turn: session.turn,
+        question: askedQuestion,
+        audioBase64: audio.base64,
+        mimeType: audio.mimeType,
+        history: session.history,
+      }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (!data || !data.ok) {
+          showError(
+            "Something went wrong. Tap the microphone to try that answer again.",
+          );
+          setMic("idle", "Tap to answer", "Take your time.");
+          return;
+        }
+
+        session.history.push({
+          question: askedQuestion,
+          transcript: data.transcript || "",
+        });
+
+        if (session.retrying) {
+          finishSession();
+          return;
+        }
+
+        // Two thirds of surveyed users said a realistic session is five minutes or
+        // more, and four turns runs shorter than that. Rather than making the length
+        // adaptive, which would remove the visible end a nervous user needs, the
+        // session offers to continue once the planned questions are done.
+        if (session.turn >= TURNS) {
+          session.pendingQuestion = data.question;
+          offerMore();
+          return;
+        }
+
+        session.turn += 1;
+        session.question = data.question;
+        paintQuestion();
+        speak(session.question);
+      })
+      .catch(function () {
+        showError(
+          "The connection dropped. Tap the microphone to try that answer again.",
+        );
+        setMic("idle", "Tap to answer", "Take your time.");
+      });
+  }
+
+  // Bounded so the offer cannot repeat forever.
+  var MAX_TURNS = 8;
+
+  function offerMore() {
+    if (session.history.length >= MAX_TURNS || !session.pendingQuestion) {
+      finishSession();
+      return;
+    }
+    try {
+      window.speechSynthesis && window.speechSynthesis.cancel();
+    } catch (e) {}
+    var n = session.history.length;
+    var words = [
+      "",
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+      "seven",
+      "eight",
+    ];
+    $("more-title").textContent =
+      "You have answered " +
+      (words[n] || n) +
+      (n === 1 ? " question." : " questions.");
+    $("more-scenario").textContent = session.scenario.title;
+    $("more-count").textContent = n + (n === 1 ? " answer" : " answers");
+    show("s-more");
+  }
+
+  $("more-continue").addEventListener("click", function () {
+    session.turn += 1;
+    session.extended = true;
+    session.question = session.pendingQuestion;
+    session.pendingQuestion = null;
+    $("sp-error").classList.add("hidden");
+    paintQuestion();
+    show("s-speak");
+    speak(session.question);
+  });
+
+  $("more-finish").addEventListener("click", function () {
+    finishSession();
+  });
+
+  // ---- feedback --------------------------------------------------------------
+  function finishSession() {
+    var mins = Math.max(
+      1,
+      Math.round((Date.now() - session.startedAt) / 60000),
+    );
+    $("fb-scenario").textContent = session.scenario.title;
+    $("fb-meta").textContent =
+      session.history.length + " answers · about " + mins + " min";
+    setFeedbackLoading(true);
+    show("s-feedback");
+
+    // Count each session exactly once. Reaching this screen again after a retry is
+    // the same session, and counting it twice would inflate the North Star both
+    // locally and in the database.
+    if (!session.recorded) {
+      session.recorded = true;
+      recordSession(
+        session.history.length,
+        Date.now() - session.startedAt,
+        session.extended,
+      );
+      if (session.history.length >= 3) recordCompletion();
+    }
+
+    fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scenarioId: session.scenario.id,
+        history: session.history,
+        avoid: (store.read().saidBefore || []).slice(-6),
+      }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (d) {
+        paintFeedback(d && d.ok ? d : null);
+      })
+      .catch(function () {
+        paintFeedback(null);
+      });
+  }
+
+  var SAFE_FEEDBACK = {
     strength:
-      "You spoke out loud in English for a whole session. That is the practice that actually builds the skill.",
+      "You kept speaking through the whole session. That is the part most people avoid, and you did it.",
     improvement:
       "Next time, try adding one more sentence of detail to your first answer.",
     retry_question: "Try your first answer again, in about thirty seconds.",
-  },
-  {
-    strength:
-      "You answered the questions in your own words instead of avoiding them.",
-    improvement:
-      "Next time, try giving one real example instead of a general answer.",
-    retry_question:
-      "Pick any question from this session and answer it once more.",
-  },
-  {
-    strength:
-      "You put your thoughts into spoken English, which is harder than writing them.",
-    improvement:
-      "Next time, try finishing an answer by saying what the result was.",
-    retry_question:
-      "Try your last answer again, and add what happened in the end.",
-  },
-  {
-    strength:
-      "You kept talking through a real conversation rather than a script.",
-    improvement:
-      "Next time, try slowing down slightly and saying a little more in each answer.",
-    retry_question:
-      "Answer one of these questions again, taking a bit longer over it.",
-  },
-];
+  };
 
-const FALLBACK_FEEDBACK = FALLBACK_FEEDBACK_POOL[0];
-
-function pickFallbackFeedback(previous) {
-  const seen = (previous || []).map((t) =>
-    normaliseText(t).split(" ").slice(0, 8).join(" "),
-  );
-  const fresh = FALLBACK_FEEDBACK_POOL.filter(function (f) {
-    const key = normaliseText(f.strength).split(" ").slice(0, 8).join(" ");
-    const key2 = normaliseText(f.improvement).split(" ").slice(0, 8).join(" ");
-    return seen.indexOf(key) === -1 && seen.indexOf(key2) === -1;
-  });
-  const pool = fresh.length ? fresh : FALLBACK_FEEDBACK_POOL;
-  return pool[Math.floor(Math.random() * pool.length)];
-}
-
-function scenarioById(id) {
-  for (let i = 0; i < SCENARIOS.length; i++) {
-    if (SCENARIOS[i].id === id) return SCENARIOS[i];
+  function setFeedbackLoading(on) {
+    $("fb-loading").classList.toggle("hidden", !on);
+    $("fb-cards").classList.toggle("hidden", on);
+    $("fb-retry").disabled = on;
+    $("fb-retry").classList.toggle("hidden", on);
+    $("fb-done").classList.toggle("hidden", on);
   }
-  return null;
-}
 
-app.get("/api/scenarios", (req, res) => {
-  res.json({
-    turns: TURNS,
-    scenarios: SCENARIOS.map((s) => ({
-      id: s.id,
-      title: s.title,
-      blurb: s.blurb,
-      openings: s.openings,
-    })),
-  });
-});
-
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: Boolean(API_KEY),
-    model: MODEL,
-    turns: TURNS,
-    database: dbReady,
-  });
-});
-
-// --- Gemini plumbing ----------------------------------------------------------
-
-async function callGemini(systemText, parts) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
-  try {
-    const res = await fetch(`${BASE}/models/${MODEL}:generateContent`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemText }] },
-        contents: [{ role: "user", parts: parts }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.8,
-          maxOutputTokens: 1200,
-        },
-      }),
-    });
-    const raw = await res.text();
-    if (!res.ok)
-      return {
-        ok: false,
-        reason: `HTTP ${res.status}`,
-        raw: raw.slice(0, 400),
-      };
-    return { ok: true, raw };
-  } catch (err) {
-    const aborted = err && err.name === "AbortError";
-    return {
-      ok: false,
-      reason: aborted ? "timeout" : String(err.message || err),
-    };
-  } finally {
-    clearTimeout(timer);
+  function rememberFeedback(f) {
+    if (!f) return;
+    var st = store.read();
+    var said = st.saidBefore || [];
+    if (f.strength) said.push(f.strength);
+    if (f.improvement) said.push(f.improvement);
+    st.saidBefore = said.slice(-6);
+    store.write(st);
   }
-}
 
-// Models sometimes wrap JSON in code fences, and truncate it when they run long.
-// gemini-3.5-flash returned an unterminated string during testing, so nothing
-// here assumes the response parses.
-function extractJson(raw) {
-  try {
-    const envelope = JSON.parse(raw);
-    const parts =
-      envelope &&
-      envelope.candidates &&
-      envelope.candidates[0] &&
-      envelope.candidates[0].content &&
-      envelope.candidates[0].content.parts;
-    const text = Array.isArray(parts)
-      ? parts.map((p) => p.text || "").join("")
-      : "";
-    const cleaned = text
-      .replace(/^```(?:json)?/i, "")
-      .replace(/```$/, "")
-      .trim();
-    return JSON.parse(cleaned);
-  } catch (err) {
-    return null;
-  }
-}
-
-function nonEmpty(v) {
-  return typeof v === "string" && v.trim().length > 0;
-}
-
-function normaliseText(t) {
-  return String(t)
-    .toLowerCase()
-    .replace(/[^a-z0-9 ]/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Two attempts, then the caller falls back to static content.
-async function askGemini(systemText, parts, validate) {
-  let lastReason = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await callGemini(systemText, parts);
-    if (!res.ok) {
-      lastReason = res.reason;
-      continue;
+  function paintFeedback(d) {
+    var f = d || SAFE_FEEDBACK;
+    setFeedbackLoading(false);
+    if (d && !d.fallback && !session.feedbackRemembered) {
+      session.feedbackRemembered = true;
+      rememberFeedback(d);
     }
-    const parsed = extractJson(res.raw);
-    if (parsed && validate(parsed)) return { ok: true, data: parsed };
-    lastReason = parsed ? "missing fields" : "unparseable";
-  }
-  return { ok: false, reason: lastReason };
-}
-
-// --- Turn: the user has spoken, ask the next question -------------------------
-
-const TURN_SYSTEM = [
-  "You are running a short practice job interview for a nervous Indian job seeker",
-  "who reads and writes English well but is anxious about speaking it.",
-  "Your job is to keep them speaking, not to teach English.",
-  "",
-  "You are given the question just asked and an audio recording of their answer.",
-  "",
-  "1. Transcribe the answer as spoken. Do not correct grammar or tidy it up.",
-  "2. Ask one short follow-up question, under 25 spoken words, built on something",
-  "   specific they actually said.",
-  "",
-  "Never correct grammar, pronunciation, accent or vocabulary. Never evaluate the",
-  "answer. Never give advice. Never ask more than one question.",
-  "",
-  "Refer to what they talked about, not their exact wording. Speech recognition",
-  "misheard names and technical terms in testing, and quoting a misheard word back",
-  "would embarrass the person for a mistake they did not make.",
-  "",
-  "If the audio is silent or unintelligible, set transcript to an empty string and",
-  "ask a simpler version of the same question without commenting on it.",
-  "",
-  "If they answer in a language other than English, do not comment on it and do not",
-  "translate. Ask a simpler, shorter question in English so they can try again.",
-  "",
-  "If they swear, insult you, or say something rude, do not repeat the words, do not",
-  "react to them, and do not lecture them. Ask the next question calmly as if it did",
-  "not happen. Never use offensive language yourself.",
-  "",
-  "If they say something off-topic, treat it as nerves and ask a simple question that",
-  "brings them back to the practice.",
-  "",
-  "If they say something that suggests real distress or that they may be in danger,",
-  "stop the practice line of questioning. Say one short kind sentence and suggest they",
-  "talk to someone they trust. Do not counsel them and do not continue interviewing.",
-  "",
-  "Never repeat a question that has already been asked in this session, and never ask",
-  "a question that is only a small rewording of one already asked.",
-  "",
-  'Return only JSON: {"transcript": string, "question": string}',
-].join("\n");
-
-app.post("/api/turn", async (req, res) => {
-  const { scenarioId, turn, question, audioBase64, mimeType, history } =
-    req.body || {};
-  const scenario = scenarioById(scenarioId);
-
-  if (!scenario)
-    return res.status(400).json({ ok: false, error: "Unknown scenario." });
-  if (!API_KEY)
-    return res
-      .status(500)
-      .json({ ok: false, error: "Server is not configured." });
-
-  const turnIndex = Number(turn) || 1;
-
-  // Everything already asked this session, so nothing gets asked twice. Extended
-  // sessions ran past the end of the fallback list and repeated the same question
-  // until the cap; both the model and the fallback are now checked against this.
-  const askedList = (Array.isArray(history) ? history : [])
-    .map((h) => (h && h.question) || "")
-    .concat([question || ""])
-    .filter(nonEmpty);
-
-  const askedSet = askedList.map(normaliseText);
-  const alreadyAsked = (q) => askedSet.indexOf(normaliseText(q)) !== -1;
-
-  const unusedFallbacks = scenario.fallbacks.filter((q) => !alreadyAsked(q));
-  const fallbackQuestion =
-    unusedFallbacks.length > 0
-      ? unusedFallbacks[turnIndex % unusedFallbacks.length]
-      : GENERIC_FALLBACKS[turnIndex % GENERIC_FALLBACKS.length];
-
-  if (typeof audioBase64 !== "string" || audioBase64.length < 100) {
-    return res.status(400).json({ ok: false, error: "No audio received." });
+    $("fb-strength").textContent = f.strength || SAFE_FEEDBACK.strength;
+    $("fb-improvement").textContent =
+      f.improvement || SAFE_FEEDBACK.improvement;
+    $("fb-retry").disabled = false;
+    $("fb-retry").setAttribute(
+      "data-q",
+      f.retry_question || SAFE_FEEDBACK.retry_question,
+    );
   }
 
-  const priorLines = Array.isArray(history)
-    ? history
-        .filter((h) => h && nonEmpty(h.question))
-        .map(
-          (h) =>
-            `Asked: ${h.question}\nThey said: ${h.transcript || "(unclear)"}`,
-        )
-        .join("\n\n")
-    : "";
-
-  const parts = [
-    {
-      text:
-        (priorLines ? `Earlier in this session:\n${priorLines}\n\n` : "") +
-        `The question just asked was: "${question || scenario.openings[0]}"`,
-    },
-    {
-      inlineData: {
-        mimeType: String(mimeType || "")
-          .split(";")[0]
-          .trim(),
-        data: audioBase64,
-      },
-    },
-  ];
-
-  const result = await askGemini(
-    TURN_SYSTEM,
-    parts,
-    (d) =>
-      typeof d.transcript === "string" &&
-      nonEmpty(d.question) &&
-      !alreadyAsked(d.question),
-  );
-
-  if (result.ok) {
-    return res.json({
-      ok: true,
-      transcript: result.data.transcript,
-      question: result.data.question,
-      fallback: false,
-    });
+  function recordCompletion() {
+    var s = store.read();
+    s.completed = (s.completed || 0) + 1;
+    s.lastScenario = session.scenario.id;
+    s.lastAt = Date.now();
+    store.write(s);
   }
 
-  // The session continues on a pre-written question rather than ending.
-  res.json({
-    ok: true,
-    transcript: "",
-    question: fallbackQuestion,
-    fallback: true,
-    reason: result.reason,
+  $("fb-retry").addEventListener("click", function () {
+    var q =
+      $("fb-retry").getAttribute("data-q") || SAFE_FEEDBACK.retry_question;
+    session.retrying = true;
+    session.question = q;
+    $("sp-error").classList.add("hidden");
+    paintQuestion();
+    show("s-speak");
+    speak(q);
   });
-});
 
-// --- Feedback: one strength, one improvement, one retry -----------------------
-
-const FEEDBACK_SYSTEM = [
-  "You are giving end-of-practice feedback to a nervous job seeker who has just",
-  "finished a spoken interview practice session in English.",
-  "Your goal is that they want to practice again today.",
-  "",
-  "Give exactly one specific strength, drawn from what they actually said, not",
-  "generic praise. Give exactly one improvement, and only one, phrased as something",
-  "to try rather than something they did wrong. Give one short retry instruction",
-  "naming which question to answer again.",
-  "",
-  "Never mention grammar, accent, pronunciation, filler words or vocabulary.",
-  "Never give a score, grade or rating. Never say they failed or would not get the",
-  "job. Keep each field under 30 words. Write at a plain English reading level.",
-  "",
-  "The transcript comes from speech recognition and may contain mistakes. Never",
-  "comment on odd wording, and never quote them word for word.",
-  "",
-  "If the answers contain swearing, insults or nonsense, do not repeat any of it and",
-  "do not scold them. Give neutral, encouraging feedback about having spoken, and make",
-  "the improvement about answering the question that was asked.",
-  "",
-  "If any answer was in another language, do not comment on it. Make the improvement",
-  "about trying the next answer in English.",
-  "",
-  "Vary your feedback. Pick a different strength and a different improvement from the",
-  "ones listed as already given, even if the session looks similar to an earlier one.",
-  "There is always something specific in what they said that has not been mentioned yet.",
-  "",
-  "If the transcript is too short or unclear to judge, still give an encouraging",
-  "strength about having spoken, and make the improvement about giving one more",
-  "sentence of detail next time.",
-  "",
-  'Return only JSON: {"strength": string, "improvement": string, "retry_question": string}',
-].join("\n");
-
-app.post("/api/feedback", async (req, res) => {
-  const { scenarioId, history, avoid } = req.body || {};
-  const scenario = scenarioById(scenarioId);
-
-  if (!scenario)
-    return res.status(400).json({ ok: false, error: "Unknown scenario." });
-  if (!API_KEY)
-    return res.json({ ok: true, fallback: true, ...pickFallbackFeedback([]) });
-
-  const lines = Array.isArray(history)
-    ? history
-        .filter((h) => h && nonEmpty(h.question))
-        .map(
-          (h) =>
-            `Asked: ${h.question}\nThey said: ${h.transcript || "(unclear)"}`,
-        )
-        .join("\n\n")
-    : "";
-
-  if (!lines) {
-    return res.json({
-      ok: true,
-      fallback: true,
-      ...pickFallbackFeedback(Array.isArray(avoid) ? avoid : []),
-    });
-  }
-
-  // Feedback repeated itself across short sessions because each call knew nothing
-  // about the last. The client sends what was said before so it can be avoided,
-  // and a response that repeats it is rejected and retried.
-  const previous = Array.isArray(avoid) ? avoid.filter(nonEmpty).slice(-6) : [];
-  const shorthand = (t) => normaliseText(t).split(" ").slice(0, 8).join(" ");
-  const previousShort = previous.map(shorthand);
-  const repeatsPrevious = (t) => previousShort.indexOf(shorthand(t)) !== -1;
-
-  const answers = (Array.isArray(history) ? history : []).map(
-    (h) => (h && h.transcript) || "",
-  );
-  const words = answers.join(" ").trim().split(/\s+/).filter(Boolean).length;
-  const avgWords = answers.length ? Math.round(words / answers.length) : 0;
-
-  const context =
-    `Practice scenario: ${scenario.title}\n\n${lines}\n\n` +
-    `Their answers averaged about ${avgWords} words each.` +
-    (avgWords > 0 && avgWords < 25
-      ? " Their answers were short, so there was little to work with. Make the improvement" +
-        " about saying more next time, and explain it as the way to get more interesting" +
-        " questions, never as something they did wrong."
-      : "") +
-    (previous.length
-      ? `\n\nIn earlier sessions they were already told the following. Do not repeat these` +
-        ` points or say them in different words. Find something new:\n- ${previous.join("\n- ")}`
-      : "");
-
-  const result = await askGemini(
-    FEEDBACK_SYSTEM,
-    [{ text: context }],
-    (d) =>
-      nonEmpty(d.strength) &&
-      nonEmpty(d.improvement) &&
-      nonEmpty(d.retry_question) &&
-      !repeatsPrevious(d.strength) &&
-      !repeatsPrevious(d.improvement),
-  );
-
-  if (result.ok) {
-    return res.json({
-      ok: true,
-      fallback: false,
-      strength: result.data.strength,
-      improvement: result.data.improvement,
-      retry_question: result.data.retry_question,
-    });
-  }
-
-  res.json({
-    ok: true,
-    fallback: true,
-    reason: result.reason,
-    ...pickFallbackFeedback(previous),
+  $("fb-done").addEventListener("click", function () {
+    var st = store.read();
+    // Asked once, after a win, and never again if answered or declined.
+    if ((st.completed || 0) >= 1 && !st.identified && !st.declinedIdentity) {
+      $("save-error").classList.add("hidden");
+      show("s-save");
+      return;
+    }
+    goHome();
   });
-});
 
-// --- session and identity -----------------------------------------------------
-
-function cleanPhone(v) {
-  const digits = String(v || "").replace(/[^0-9]/g, "");
-  return digits.length >= 10 && digits.length <= 13 ? digits : null;
-}
-
-app.post("/api/session", async (req, res) => {
-  const { deviceId, scenarioId, answers, durationMs, extended } =
-    req.body || {};
-  if (!nonEmpty(deviceId))
-    return res.status(400).json({ ok: false, error: "No device id." });
-
-  // A completed session is three or more spoken answers plus reaching feedback.
-  const answerCount = Math.max(0, parseInt(answers, 10) || 0);
-  const completed = answerCount >= 3;
-
-  if (!dbReady)
-    return res.json({
-      ok: true,
-      stored: false,
-      reason: dbError || "no database",
-    });
-
-  try {
-    await pool.query(
-      `INSERT INTO sessions (device_id, scenario, answers, duration_ms, completed, extended)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        String(deviceId).slice(0, 64),
-        String(scenarioId || "").slice(0, 40),
-        answerCount,
-        Math.max(0, parseInt(durationMs, 10) || 0),
-        completed,
-        Boolean(extended),
-      ],
-    );
-    res.json({ ok: true, stored: true, completed });
-  } catch (err) {
-    // Never fail the user's session because a write failed.
-    res.json({ ok: true, stored: false, reason: String(err.message || err) });
-  }
-});
-
-app.post("/api/identify", async (req, res) => {
-  const { deviceId, name, phone } = req.body || {};
-  if (!nonEmpty(deviceId))
-    return res.status(400).json({ ok: false, error: "No device id." });
-
-  const phoneDigits = cleanPhone(phone);
-  if (!phoneDigits)
-    return res
-      .status(400)
-      .json({ ok: false, error: "That does not look like a phone number." });
-
-  if (!dbReady)
-    return res.json({
-      ok: true,
-      stored: false,
-      reason: dbError || "no database",
-    });
-
-  try {
-    await pool.query(
-      `INSERT INTO users (device_id, name, phone) VALUES ($1, $2, $3)
-       ON CONFLICT (device_id) DO UPDATE SET name = EXCLUDED.name, phone = EXCLUDED.phone`,
-      [
-        String(deviceId).slice(0, 64),
-        String(name || "").slice(0, 80),
-        phoneDigits,
-      ],
-    );
-    res.json({ ok: true, stored: true });
-  } catch (err) {
-    res.json({ ok: true, stored: false, reason: String(err.message || err) });
-  }
-});
-
-// --- metrics, for the Step 6 dashboard ----------------------------------------
-// Behind a key because it exposes counts, and it never returns phone numbers.
-app.get("/api/stats", async (req, res) => {
-  const key = process.env.ADMIN_KEY;
-  if (!key || req.query.key !== key)
-    return res.status(403).json({ ok: false, error: "Forbidden." });
-  if (!dbReady) return res.json({ ok: false, error: dbError || "no database" });
-
-  try {
-    const q = async (sql) => (await pool.query(sql)).rows;
-    const [totals] = await q(`
-      SELECT
-        COUNT(*)::int                                   AS sessions_started,
-        COUNT(*) FILTER (WHERE completed)::int          AS sessions_completed,
-        COUNT(DISTINCT device_id)::int                  AS devices,
-        COUNT(DISTINCT device_id) FILTER (WHERE completed)::int AS devices_completed,
-        COALESCE(ROUND(AVG(answers) FILTER (WHERE completed))::int, 0) AS avg_answers,
-        COUNT(*) FILTER (WHERE extended)::int           AS sessions_extended
-      FROM sessions
-    `);
-    const [identified] = await q(
-      `SELECT COUNT(*)::int AS identified_users FROM users WHERE phone IS NOT NULL`,
-    );
-    const [median] = await q(`
-      SELECT COALESCE(ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_ms) / 1000)::int, 0) AS median_seconds
-      FROM sessions WHERE completed AND duration_ms > 0
-    `);
-    const byDay = await q(`
-      SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day,
-             COUNT(*)::int AS started,
-             COUNT(*) FILTER (WHERE completed)::int AS completed
-      FROM sessions GROUP BY 1 ORDER BY 1 DESC LIMIT 14
-    `);
-    const byScenario = await q(`
-      SELECT scenario, COUNT(*)::int AS started, COUNT(*) FILTER (WHERE completed)::int AS completed
-      FROM sessions GROUP BY 1 ORDER BY 2 DESC
-    `);
-    const repeat = await q(`
-      SELECT sessions_per_device, COUNT(*)::int AS devices FROM (
-        SELECT device_id, COUNT(*)::int AS sessions_per_device
-        FROM sessions WHERE completed GROUP BY device_id
-      ) t GROUP BY 1 ORDER BY 1
-    `);
-
-    res.json({
-      ok: true,
-      note: "Week 4 completion cannot be computed until four weeks after the first signup.",
-      totals: { ...totals, ...identified, ...median },
-      byDay,
-      byScenario,
-      repeatDistribution: repeat,
-    });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: String(err.message || err) });
-  }
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`OutLoud on ${PORT}, model ${MODEL}`);
-  if (!API_KEY) console.log("WARNING: GEMINI_API_KEY is not set.");
-  initDb().then(() => {
-    console.log(
-      dbReady ? "Database ready." : "Database not in use: " + dbError,
-    );
+  $("save-skip").addEventListener("click", function () {
+    var st = store.read();
+    st.declinedIdentity = true;
+    store.write(st);
+    goHome();
   });
-});
+
+  $("save-submit").addEventListener("click", function () {
+    var name = $("save-name").value.trim();
+    var phone = $("save-phone").value.trim();
+    var digits = phone.replace(/[^0-9]/g, "");
+
+    if (digits.length < 10 || digits.length > 13) {
+      var e = $("save-error");
+      e.textContent =
+        "Please check the number. It should be at least 10 digits.";
+      e.classList.remove("hidden");
+      return;
+    }
+
+    $("save-submit").disabled = true;
+    $("save-submit").textContent = "Saving…";
+
+    fetch("/api/identify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId: deviceId(), name: name, phone: digits }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (d) {
+        $("save-submit").disabled = false;
+        $("save-submit").textContent = "Save my progress";
+        if (!d || !d.ok) {
+          var e2 = $("save-error");
+          e2.textContent =
+            (d && d.error) ||
+            "Could not save that. You can carry on without it.";
+          e2.classList.remove("hidden");
+          return;
+        }
+        var st = store.read();
+        st.identified = true;
+        st.name = name;
+        store.write(st);
+        goHome();
+      })
+      .catch(function () {
+        $("save-submit").disabled = false;
+        $("save-submit").textContent = "Save my progress";
+        var e3 = $("save-error");
+        e3.textContent =
+          "The connection dropped. You can carry on without saving.";
+        e3.classList.remove("hidden");
+      });
+  });
+  $("sp-quit").addEventListener("click", function () {
+    try {
+      window.speechSynthesis && window.speechSynthesis.cancel();
+    } catch (e) {}
+    if (recorder && recorder.state === "recording")
+      stopRecording(function () {});
+    goHome();
+  });
+
+  // ---- home ------------------------------------------------------------------
+  function goHome() {
+    // Wire the buttons before painting anything. If painting fails, the user can
+    // still move; if wiring came second, a paint error would trap them here.
+    $("home-again").onclick = function () {
+      var st = store.read();
+      var pick = null;
+      for (var j = 0; j < scenarios.length; j++) {
+        if (scenarios[j].id === st.lastScenario) pick = scenarios[j];
+      }
+      beginSession(pick || scenarios[0]);
+    };
+    show("s-home");
+
+    try {
+      paintHome();
+    } catch (err) {
+      // Painting is cosmetic. Never let it block the person from practicing.
+    }
+  }
+
+  function paintHome() {
+    var s = store.read();
+    var n = s.completed || 0;
+    $("home-count").textContent = n;
+    $("home-count-label").textContent =
+      n === 1 ? "session completed" : "sessions completed";
+    $("home-note").textContent =
+      n === 0
+        ? ""
+        : n === 1
+          ? "You have spoken out loud once. The next one is easier."
+          : "You have spoken out loud " + n + " times.";
+    $("home-greet").textContent =
+      (s.completed || 0) > 0
+        ? s.name
+          ? "Welcome back, " + s.name
+          : "Welcome back"
+        : "Ready when you are";
+
+    var last = null;
+    for (var i = 0; i < scenarios.length; i++) {
+      if (scenarios[i].id === s.lastScenario) last = scenarios[i];
+    }
+    $("home-last").textContent = last ? "Last time: " + last.title : "";
+
+    // The "Practice again" button already covers the last scenario, so list the rest.
+    var others = scenarios.filter(function (x) {
+      return !last || x.id !== last.id;
+    });
+    renderList($("home-list"), others, beginSession);
+  }
+
+  // ---- navigation ------------------------------------------------------------
+  $("go-privacy").addEventListener("click", function () {
+    show("s-privacy");
+  });
+  $("back-welcome").addEventListener("click", function () {
+    show("s-welcome");
+  });
+  $("go-scenarios").addEventListener("click", function () {
+    show("s-choose");
+  });
+
+  // ---- boot ------------------------------------------------------------------
+  // Open with ?reset=1 to clear this phone's saved sessions and start fresh.
+  if (window.location.search.indexOf("reset=1") !== -1) {
+    try {
+      localStorage.removeItem("outloud");
+    } catch (e) {}
+    try {
+      history.replaceState(null, "", window.location.pathname);
+    } catch (e) {}
+  }
+
+  // Surfaced deliberately: a mismatched index.html should be obvious in the console
+  // rather than showing up as buttons that quietly do nothing.
+  setTimeout(function () {
+    if (MISSING.length)
+      console.warn(
+        "OutLoud: missing elements in the page:",
+        MISSING.join(", "),
+      );
+  }, 400);
+
+  fetch("/api/scenarios")
+    .then(function (r) {
+      return r.json();
+    })
+    .then(function (d) {
+      scenarios = (d && d.scenarios) || [];
+      TURNS = (d && d.turns) || 4;
+      renderScenarioList($("scenario-list"), beginSession);
+
+      var s = store.read();
+      if (s.completed) goHome();
+    })
+    .catch(function () {
+      $("go-scenarios").disabled = true;
+      $("go-scenarios").textContent = "Could not reach the server";
+    });
+})();
