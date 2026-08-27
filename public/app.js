@@ -206,7 +206,12 @@
         ? "Question " + session.turn
         : "Question " + session.turn + " of " + TURNS;
     $("sp-question").textContent = session.question;
-    setMic("idle", "Tap to answer", "Take your time.");
+    var firstEver = !(store.read().completed > 0);
+    var hint =
+      firstEver && session.turn === 1 && !session.retrying
+        ? "There is no time limit. The more you say, the more it has to ask about."
+        : "Take your time.";
+    setMic("idle", "Tap to answer", hint);
   }
 
   function setMic(state, stateText, hintText) {
@@ -383,6 +388,7 @@
       body: JSON.stringify({
         scenarioId: session.scenario.id,
         history: session.history,
+        avoid: (store.read().saidBefore || []).slice(-6),
       }),
     })
       .then(function (r) {
@@ -412,9 +418,20 @@
     $("fb-done").classList.toggle("hidden", on);
   }
 
+  function rememberFeedback(f) {
+    if (!f) return;
+    var st = store.read();
+    var said = st.saidBefore || [];
+    if (f.strength) said.push(f.strength);
+    if (f.improvement) said.push(f.improvement);
+    st.saidBefore = said.slice(-6);
+    store.write(st);
+  }
+
   function paintFeedback(d) {
     var f = d || SAFE_FEEDBACK;
     setFeedbackLoading(false);
+    if (d && !d.fallback) rememberFeedback(d);
     $("fb-strength").textContent = f.strength || SAFE_FEEDBACK.strength;
     $("fb-improvement").textContent =
       f.improvement || SAFE_FEEDBACK.improvement;

@@ -100,13 +100,57 @@ const GENERIC_FALLBACKS = [
   "What is the most important part of what you just said?",
 ];
 
-const FALLBACK_FEEDBACK = {
-  strength:
-    "You kept speaking through the whole session. That is the part most people avoid, and you did it.",
-  improvement:
-    "Next time, try adding one more sentence of detail to your first answer.",
-  retry_question: "Try your first answer again, in about thirty seconds.",
-};
+// A pool rather than one message. Validation now rejects feedback that repeats an
+// earlier session, which means the fallback runs more often — and a single fixed
+// fallback would reintroduce the repetition it exists to prevent.
+const FALLBACK_FEEDBACK_POOL = [
+  {
+    strength:
+      "You kept speaking through the whole session. That is the part most people avoid, and you did it.",
+    improvement:
+      "Next time, try adding one more sentence of detail to your first answer.",
+    retry_question: "Try your first answer again, in about thirty seconds.",
+  },
+  {
+    strength:
+      "You answered every question that was put to you. That gets easier each time you do it.",
+    improvement:
+      "Next time, try giving one real example instead of a general answer.",
+    retry_question:
+      "Pick any question from this session and answer it once more.",
+  },
+  {
+    strength:
+      "You stayed with it to the end of the session rather than stopping early.",
+    improvement:
+      "Next time, try finishing an answer by saying what the result was.",
+    retry_question:
+      "Try your last answer again, and add what happened in the end.",
+  },
+  {
+    strength:
+      "You spoke in English for the whole session, which is exactly the practice that counts.",
+    improvement:
+      "Next time, try slowing down slightly and saying a little more in each answer.",
+    retry_question:
+      "Answer one of these questions again, taking a bit longer over it.",
+  },
+];
+
+const FALLBACK_FEEDBACK = FALLBACK_FEEDBACK_POOL[0];
+
+function pickFallbackFeedback(previous) {
+  const seen = (previous || []).map((t) =>
+    normaliseText(t).split(" ").slice(0, 8).join(" "),
+  );
+  const fresh = FALLBACK_FEEDBACK_POOL.filter(function (f) {
+    const key = normaliseText(f.strength).split(" ").slice(0, 8).join(" ");
+    const key2 = normaliseText(f.improvement).split(" ").slice(0, 8).join(" ");
+    return seen.indexOf(key) === -1 && seen.indexOf(key2) === -1;
+  });
+  const pool = fresh.length ? fresh : FALLBACK_FEEDBACK_POOL;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
 
 function scenarioById(id) {
   for (let i = 0; i < SCENARIOS.length; i++) {
@@ -202,6 +246,14 @@ function nonEmpty(v) {
   return typeof v === "string" && v.trim().length > 0;
 }
 
+function normaliseText(t) {
+  return String(t)
+    .toLowerCase()
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 // Two attempts, then the caller falls back to static content.
 async function askGemini(systemText, parts, validate) {
   let lastReason = null;
@@ -283,14 +335,8 @@ app.post("/api/turn", async (req, res) => {
     .concat([question || ""])
     .filter(nonEmpty);
 
-  const normalise = (t) =>
-    String(t)
-      .toLowerCase()
-      .replace(/[^a-z0-9 ]/g, "")
-      .replace(/\s+/g, " ")
-      .trim();
-  const askedSet = askedList.map(normalise);
-  const alreadyAsked = (q) => askedSet.indexOf(normalise(q)) !== -1;
+  const askedSet = askedList.map(normaliseText);
+  const alreadyAsked = (q) => askedSet.indexOf(normaliseText(q)) !== -1;
 
   const unusedFallbacks = scenario.fallbacks.filter((q) => !alreadyAsked(q));
   const fallbackQuestion =
@@ -382,6 +428,10 @@ const FEEDBACK_SYSTEM = [
   "If any answer was in another language, do not comment on it. Make the improvement",
   "about trying the next answer in English.",
   "",
+  "Vary your feedback. Pick a different strength and a different improvement from the",
+  "ones listed as already given, even if the session looks similar to an earlier one.",
+  "There is always something specific in what they said that has not been mentioned yet.",
+  "",
   "If the transcript is too short or unclear to judge, still give an encouraging",
   "strength about having spoken, and make the improvement about giving one more",
   "sentence of detail next time.",
@@ -390,13 +440,13 @@ const FEEDBACK_SYSTEM = [
 ].join("\n");
 
 app.post("/api/feedback", async (req, res) => {
-  const { scenarioId, history } = req.body || {};
+  const { scenarioId, history, avoid } = req.body || {};
   const scenario = scenarioById(scenarioId);
 
   if (!scenario)
     return res.status(400).json({ ok: false, error: "Unknown scenario." });
   if (!API_KEY)
-    return res.json({ ok: true, fallback: true, ...FALLBACK_FEEDBACK });
+    return res.json({ ok: true, fallback: true, ...pickFallbackFeedback([]) });
 
   const lines = Array.isArray(history)
     ? history
@@ -409,16 +459,49 @@ app.post("/api/feedback", async (req, res) => {
     : "";
 
   if (!lines) {
-    return res.json({ ok: true, fallback: true, ...FALLBACK_FEEDBACK });
+    return res.json({
+      ok: true,
+      fallback: true,
+      ...pickFallbackFeedback(Array.isArray(avoid) ? avoid : []),
+    });
   }
+
+  // Feedback repeated itself across short sessions because each call knew nothing
+  // about the last. The client sends what was said before so it can be avoided,
+  // and a response that repeats it is rejected and retried.
+  const previous = Array.isArray(avoid) ? avoid.filter(nonEmpty).slice(-6) : [];
+  const shorthand = (t) => normaliseText(t).split(" ").slice(0, 8).join(" ");
+  const previousShort = previous.map(shorthand);
+  const repeatsPrevious = (t) => previousShort.indexOf(shorthand(t)) !== -1;
+
+  const answers = (Array.isArray(history) ? history : []).map(
+    (h) => (h && h.transcript) || "",
+  );
+  const words = answers.join(" ").trim().split(/\s+/).filter(Boolean).length;
+  const avgWords = answers.length ? Math.round(words / answers.length) : 0;
+
+  const context =
+    `Practice scenario: ${scenario.title}\n\n${lines}\n\n` +
+    `Their answers averaged about ${avgWords} words each.` +
+    (avgWords > 0 && avgWords < 25
+      ? " Their answers were short, so there was little to work with. Make the improvement" +
+        " about saying more next time, and explain it as the way to get more interesting" +
+        " questions, never as something they did wrong."
+      : "") +
+    (previous.length
+      ? `\n\nIn earlier sessions they were already told the following. Do not repeat these` +
+        ` points or say them in different words. Find something new:\n- ${previous.join("\n- ")}`
+      : "");
 
   const result = await askGemini(
     FEEDBACK_SYSTEM,
-    [{ text: `Practice scenario: ${scenario.title}\n\n${lines}` }],
+    [{ text: context }],
     (d) =>
       nonEmpty(d.strength) &&
       nonEmpty(d.improvement) &&
-      nonEmpty(d.retry_question),
+      nonEmpty(d.retry_question) &&
+      !repeatsPrevious(d.strength) &&
+      !repeatsPrevious(d.improvement),
   );
 
   if (result.ok) {
@@ -435,7 +518,7 @@ app.post("/api/feedback", async (req, res) => {
     ok: true,
     fallback: true,
     reason: result.reason,
-    ...FALLBACK_FEEDBACK,
+    ...pickFallbackFeedback(previous),
   });
 });
 
