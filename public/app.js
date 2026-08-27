@@ -95,14 +95,55 @@
   // ---- speech out ------------------------------------------------------------
   // The question is spoken as well as shown. Shown matters more: a noisy room, a
   // silent phone or a failed voice must never leave the user stuck.
-  function speak(text) {
+  // Browsers load the voice list asynchronously. The very first utterance of a
+  // page load was being dropped because no voices existed yet, which is why the
+  // first question of a first session was silent while later ones spoke.
+  var voicesReady = false;
+
+  function primeSpeech() {
     try {
       if (!window.speechSynthesis) return;
+      var list = window.speechSynthesis.getVoices();
+      if (list && list.length) {
+        voicesReady = true;
+        return;
+      }
+      window.speechSynthesis.onvoiceschanged = function () {
+        voicesReady = true;
+      };
+      // Some browsers only populate the list after a call made during a gesture.
+      var warm = new SpeechSynthesisUtterance(" ");
+      warm.volume = 0;
+      window.speechSynthesis.speak(warm);
+    } catch (e) {}
+  }
+
+  function utter(text) {
+    var u = new SpeechSynthesisUtterance(text);
+    u.rate = 0.95;
+    u.lang = "en-US";
+    window.speechSynthesis.speak(u);
+  }
+
+  function speak(text) {
+    try {
+      if (!window.speechSynthesis || !text) return;
       window.speechSynthesis.cancel();
-      var u = new SpeechSynthesisUtterance(text);
-      u.rate = 0.95;
-      u.lang = "en-US";
-      window.speechSynthesis.speak(u);
+      var list = window.speechSynthesis.getVoices();
+      if (voicesReady || (list && list.length)) {
+        utter(text);
+        return;
+      }
+      // Wait for the list, but never wait forever.
+      var spoken = false;
+      var go = function () {
+        if (spoken) return;
+        spoken = true;
+        voicesReady = true;
+        utter(text);
+      };
+      window.speechSynthesis.onvoiceschanged = go;
+      setTimeout(go, 350);
     } catch (e) {}
   }
 
@@ -478,9 +519,12 @@
       });
   }
 
+  // Last resort, used only if the server itself cannot be reached. Says only what
+  // is certainly true: that they spoke. Never claims effort or persistence the
+  // app has no way to observe.
   var SAFE_FEEDBACK = {
     strength:
-      "You kept speaking through the whole session. That is the part most people avoid, and you did it.",
+      "You spoke out loud in English for a whole session. That is the practice that actually builds the skill.",
     improvement:
       "Next time, try adding one more sentence of detail to your first answer.",
     retry_question: "Try your first answer again, in about thirty seconds.",
@@ -622,6 +666,7 @@
     // Wire the buttons before painting anything. If painting fails, the user can
     // still move; if wiring came second, a paint error would trap them here.
     $("home-again").onclick = function () {
+      primeSpeech();
       var st = store.read();
       var pick = null;
       for (var j = 0; j < scenarios.length; j++) {
@@ -678,6 +723,7 @@
     show("s-welcome");
   });
   $("go-scenarios").addEventListener("click", function () {
+    primeSpeech();
     show("s-choose");
   });
 

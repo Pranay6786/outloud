@@ -165,14 +165,14 @@ const GENERIC_FALLBACKS = [
 const FALLBACK_FEEDBACK_POOL = [
   {
     strength:
-      "You kept speaking through the whole session. That is the part most people avoid, and you did it.",
+      "You spoke out loud in English for a whole session. That is the practice that actually builds the skill.",
     improvement:
       "Next time, try adding one more sentence of detail to your first answer.",
     retry_question: "Try your first answer again, in about thirty seconds.",
   },
   {
     strength:
-      "You answered every question that was put to you. That gets easier each time you do it.",
+      "You answered the questions in your own words instead of avoiding them.",
     improvement:
       "Next time, try giving one real example instead of a general answer.",
     retry_question:
@@ -180,7 +180,7 @@ const FALLBACK_FEEDBACK_POOL = [
   },
   {
     strength:
-      "You stayed with it to the end of the session rather than stopping early.",
+      "You put your thoughts into spoken English, which is harder than writing them.",
     improvement:
       "Next time, try finishing an answer by saying what the result was.",
     retry_question:
@@ -188,7 +188,7 @@ const FALLBACK_FEEDBACK_POOL = [
   },
   {
     strength:
-      "You spoke in English for the whole session, which is exactly the practice that counts.",
+      "You kept talking through a real conversation rather than a script.",
     improvement:
       "Next time, try slowing down slightly and saying a little more in each answer.",
     retry_question:
@@ -347,6 +347,28 @@ const TURN_SYSTEM = [
   "2. Ask one short follow-up question, under 25 spoken words, built on something",
   "   specific they actually said.",
   "",
+  "The follow-up must name a concrete detail from their answer: a project, a company,",
+  "a task, a person, a number, a decision, a problem. If your question would still make",
+  "sense after somebody else's answer, it is too general and you must ask a different one.",
+  "",
+  "Weak, do not do this:",
+  "  They said: I built an attendance dashboard for my college using React.",
+  "  Bad question: What did you enjoy about that?",
+  "  Bad question: Can you tell me more about your experience?",
+  "",
+  "Strong, do this:",
+  "  They said: I built an attendance dashboard for my college using React.",
+  "  Good question: Who was using that dashboard, and what did they do before it existed?",
+  "",
+  "  They said: I worked as a business analyst for eight months at a small tech firm.",
+  "  Good question: What was the first thing you were asked to figure out there?",
+  "",
+  "  They said: We had a delay and the client was not happy about it.",
+  "  Good question: What did you actually say to the client about the delay?",
+  "",
+  "Push gently for detail rather than opinion. Ask what happened, what they did, what",
+  "they said, who else was involved, what changed. Avoid asking how they felt about it.",
+  "",
   "Never correct grammar, pronunciation, accent or vocabulary. Never evaluate the",
   "answer. Never give advice. Never ask more than one question.",
   "",
@@ -468,6 +490,19 @@ app.post("/api/turn", async (req, res) => {
 
 // --- Feedback: one strength, one improvement, one retry -----------------------
 
+// Consecutive sessions were producing similar feedback because every call was
+// asked the same open question. The server picks an angle and requires it, which
+// forces variety without needing the model to remember anything.
+const FEEDBACK_ANGLES = [
+  "the specific example or detail they gave",
+  "how they structured the answer from start to finish",
+  "how they handled a question they clearly had not prepared for",
+  "the amount of detail they gave about their own role",
+  "how they explained something technical in plain words",
+  "how they kept going when an answer was hard to start",
+  "the way they described a result or an outcome",
+];
+
 const FEEDBACK_SYSTEM = [
   "You are giving end-of-practice feedback to a nervous job seeker who has just",
   "finished a spoken interview practice session in English.",
@@ -495,6 +530,16 @@ const FEEDBACK_SYSTEM = [
   "Vary your feedback. Pick a different strength and a different improvement from the",
   "ones listed as already given, even if the session looks similar to an earlier one.",
   "There is always something specific in what they said that has not been mentioned yet.",
+  "",
+  "Quote nothing, but be concrete. Name what they talked about.",
+  "",
+  "Weak, do not do this:",
+  "  You spoke clearly and answered the questions well.",
+  "  Try to give more detail next time.",
+  "",
+  "Strong, do this:",
+  "  You explained who the dashboard was actually for, which is what makes an example land.",
+  "  Next time, finish that story by saying how much time it saved them.",
   "",
   "If the transcript is too short or unclear to judge, still give an encouraging",
   "strength about having spoken, and make the improvement about giving one more",
@@ -544,8 +589,13 @@ app.post("/api/feedback", async (req, res) => {
   const words = answers.join(" ").trim().split(/\s+/).filter(Boolean).length;
   const avgWords = answers.length ? Math.round(words / answers.length) : 0;
 
+  const angle =
+    FEEDBACK_ANGLES[Math.floor(Math.random() * FEEDBACK_ANGLES.length)];
+
   const context =
     `Practice scenario: ${scenario.title}\n\n${lines}\n\n` +
+    `For the strength, focus on ${angle}. If there is genuinely nothing there, pick ` +
+    `a different specific thing they said, but do not fall back on general praise.\n\n` +
     `Their answers averaged about ${avgWords} words each.` +
     (avgWords > 0 && avgWords < 25
       ? " Their answers were short, so there was little to work with. Make the improvement" +
