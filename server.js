@@ -65,6 +65,14 @@ async function initDb() {
   }
 }
 
+// Kept in memory so a live session can be inspected afterwards. No transcripts,
+// no audio, no personal data: only what happened to each AI call.
+const DIAG = [];
+function diag(entry) {
+  DIAG.push(Object.assign({ at: new Date().toISOString() }, entry));
+  if (DIAG.length > 80) DIAG.shift();
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.GEMINI_API_KEY;
@@ -80,15 +88,49 @@ const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
 // static fallbacks for a whole session and looked as though the AI had simply
 // become worse. Quota exhaustion is now treated as a reason to move to the next
 // model rather than as a dead end.
+// Ordered by measured quality and latency, not by version number. gemini-3.5-flash
+// is last because it took 16 seconds and returned truncated JSON during testing,
+// and gemini-3.7-flash is excluded entirely: 74 seconds on one request and a 503
+// on another. Falling into a bad model silently is worse than the quota problem
+// this chain exists to solve.
+const PREFERRED = "gemini-3.5-flash-lite";
 const MODEL_CHAIN = [MODEL].concat(
   [
-    "gemini-3.5-flash-lite",
+    PREFERRED,
     "gemini-3.6-flash",
-    "gemini-3.5-flash",
     "gemini-3.1-flash-lite",
+    "gemini-3.5-flash",
   ].filter((m) => m !== MODEL),
 );
+
 let activeModel = MODEL;
+let switchedAt = 0;
+
+// A model is only demoted for a while. Without this, one transient 503 pins the
+// app to a fallback model for the rest of its life, long after the preferred one
+// has recovered.
+const RETRY_PREFERRED_AFTER_MS = Number(
+  process.env.MODEL_RETRY_MS || 15 * 60 * 1000,
+);
+
+function currentModel() {
+  const first = MODEL_CHAIN[0];
+  if (
+    activeModel !== first &&
+    switchedAt &&
+    Date.now() - switchedAt > RETRY_PREFERRED_AFTER_MS
+  ) {
+    diag({
+      kind: "model",
+      outcome: "returning to preferred",
+      reason: "cooldown elapsed",
+      now: first,
+    });
+    activeModel = first;
+    switchedAt = 0;
+  }
+  return activeModel;
+}
 const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 15000);
 const TURNS = 4;
 
@@ -248,9 +290,12 @@ app.get("/api/scenarios", (req, res) => {
 app.get("/api/health", (req, res) => {
   res.json({
     ok: Boolean(API_KEY),
-    model: activeModel,
+    model: currentModel(),
     configured: MODEL,
     chain: MODEL_CHAIN,
+    switchedAgo: switchedAt
+      ? Math.round((Date.now() - switchedAt) / 1000) + "s"
+      : null,
     turns: TURNS,
     database: dbReady,
   });
@@ -263,7 +308,7 @@ async function callGemini(systemText, parts, model) {
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const res = await fetch(
-      `${BASE}/models/${model || activeModel}:generateContent`,
+      `${BASE}/models/${model || currentModel()}:generateContent`,
       {
         method: "POST",
         headers: {
@@ -340,14 +385,6 @@ function normaliseText(t) {
 }
 
 // Two attempts, then the caller falls back to static content.
-// Kept in memory so a live session can be inspected afterwards. No transcripts,
-// no audio, no personal data: only what happened to each AI call.
-const DIAG = [];
-function diag(entry) {
-  DIAG.push(Object.assign({ at: new Date().toISOString() }, entry));
-  if (DIAG.length > 80) DIAG.shift();
-}
-
 // Two attempts, then the caller falls back to static content. The second attempt
 // is told what went wrong, otherwise it simply reproduces the rejected answer.
 async function askGemini(systemText, parts, validate, kind) {
@@ -382,6 +419,7 @@ async function askGemini(systemText, parts, validate, kind) {
             now: candidate,
           });
           activeModel = candidate;
+          switchedAt = Date.now();
           res = alt;
           break;
         }
@@ -813,8 +851,10 @@ app.get("/api/diag", (req, res) => {
     return res.status(403).json({ ok: false, error: "Forbidden." });
   res.json({
     ok: true,
-    model: activeModel,
+    model: currentModel(),
     chain: MODEL_CHAIN,
+    callsPerSession:
+      "about 5 for four questions, about 7 if extended or retried",
     summary: {
       accepted: DIAG.filter((d) => d.outcome === "accepted").length,
       rejected: DIAG.filter((d) => d.outcome === "rejected").length,
