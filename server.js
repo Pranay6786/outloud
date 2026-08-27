@@ -42,6 +42,9 @@ const SCENARIOS = [
       "What did you enjoy most about that?",
       "Can you tell me more about one thing you mentioned?",
       "What would you like an interviewer to remember about you?",
+      "What are you hoping to do next?",
+      "What is something you are good at that people do not notice?",
+      "How would a colleague describe working with you?",
     ],
   },
   {
@@ -58,6 +61,9 @@ const SCENARIOS = [
       "What part of that work would suit you best?",
       "Tell me about a time you had to learn something quickly.",
       "What would you want to get better at in your first year?",
+      "What kind of team do you work well in?",
+      "Tell me about a time something did not go to plan.",
+      "What questions would you want to ask us?",
     ],
   },
   // Replaced "Something you built" on 26 Aug 2026. Work calls and meetings was the
@@ -78,8 +84,20 @@ const SCENARIOS = [
       "How would you explain that to someone outside your team?",
       "What would you say if they asked you to repeat that more simply?",
       "What is the one thing you would want them to remember?",
+      "How would you tell them about a delay?",
+      "How would you disagree with something said on that call?",
+      "What would you say if you did not know the answer?",
     ],
   },
+];
+
+// Used only when a scenario's own fallbacks have all been asked, which is possible
+// once a session can be extended to eight answers.
+const GENERIC_FALLBACKS = [
+  "What else would you want them to know?",
+  "Can you say a bit more about that?",
+  "What would you add if you had more time?",
+  "What is the most important part of what you just said?",
 ];
 
 const FALLBACK_FEEDBACK = {
@@ -223,6 +241,23 @@ const TURN_SYSTEM = [
   "If the audio is silent or unintelligible, set transcript to an empty string and",
   "ask a simpler version of the same question without commenting on it.",
   "",
+  "If they answer in a language other than English, do not comment on it and do not",
+  "translate. Ask a simpler, shorter question in English so they can try again.",
+  "",
+  "If they swear, insult you, or say something rude, do not repeat the words, do not",
+  "react to them, and do not lecture them. Ask the next question calmly as if it did",
+  "not happen. Never use offensive language yourself.",
+  "",
+  "If they say something off-topic, treat it as nerves and ask a simple question that",
+  "brings them back to the practice.",
+  "",
+  "If they say something that suggests real distress or that they may be in danger,",
+  "stop the practice line of questioning. Say one short kind sentence and suggest they",
+  "talk to someone they trust. Do not counsel them and do not continue interviewing.",
+  "",
+  "Never repeat a question that has already been asked in this session, and never ask",
+  "a question that is only a small rewording of one already asked.",
+  "",
   'Return only JSON: {"transcript": string, "question": string}',
 ].join("\n");
 
@@ -239,11 +274,29 @@ app.post("/api/turn", async (req, res) => {
       .json({ ok: false, error: "Server is not configured." });
 
   const turnIndex = Number(turn) || 1;
-  const fallbackIndex = Math.max(
-    0,
-    Math.min(turnIndex - 1, scenario.fallbacks.length - 1),
-  );
-  const fallbackQuestion = scenario.fallbacks[fallbackIndex];
+
+  // Everything already asked this session, so nothing gets asked twice. Extended
+  // sessions ran past the end of the fallback list and repeated the same question
+  // until the cap; both the model and the fallback are now checked against this.
+  const askedList = (Array.isArray(history) ? history : [])
+    .map((h) => (h && h.question) || "")
+    .concat([question || ""])
+    .filter(nonEmpty);
+
+  const normalise = (t) =>
+    String(t)
+      .toLowerCase()
+      .replace(/[^a-z0-9 ]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  const askedSet = askedList.map(normalise);
+  const alreadyAsked = (q) => askedSet.indexOf(normalise(q)) !== -1;
+
+  const unusedFallbacks = scenario.fallbacks.filter((q) => !alreadyAsked(q));
+  const fallbackQuestion =
+    unusedFallbacks.length > 0
+      ? unusedFallbacks[turnIndex % unusedFallbacks.length]
+      : GENERIC_FALLBACKS[turnIndex % GENERIC_FALLBACKS.length];
 
   if (typeof audioBase64 !== "string" || audioBase64.length < 100) {
     return res.status(400).json({ ok: false, error: "No audio received." });
@@ -278,7 +331,10 @@ app.post("/api/turn", async (req, res) => {
   const result = await askGemini(
     TURN_SYSTEM,
     parts,
-    (d) => typeof d.transcript === "string" && nonEmpty(d.question),
+    (d) =>
+      typeof d.transcript === "string" &&
+      nonEmpty(d.question) &&
+      !alreadyAsked(d.question),
   );
 
   if (result.ok) {
@@ -318,6 +374,13 @@ const FEEDBACK_SYSTEM = [
   "",
   "The transcript comes from speech recognition and may contain mistakes. Never",
   "comment on odd wording, and never quote them word for word.",
+  "",
+  "If the answers contain swearing, insults or nonsense, do not repeat any of it and",
+  "do not scold them. Give neutral, encouraging feedback about having spoken, and make",
+  "the improvement about answering the question that was asked.",
+  "",
+  "If any answer was in another language, do not comment on it. Make the improvement",
+  "about trying the next answer in English.",
   "",
   "If the transcript is too short or unclear to judge, still give an encouraging",
   "strength about having spoken, and make the improvement about giving one more",

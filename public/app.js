@@ -326,8 +326,24 @@
     try {
       window.speechSynthesis && window.speechSynthesis.cancel();
     } catch (e) {}
+    var n = session.history.length;
+    var words = [
+      "",
+      "one",
+      "two",
+      "three",
+      "four",
+      "five",
+      "six",
+      "seven",
+      "eight",
+    ];
+    $("more-title").textContent =
+      "You have answered " +
+      (words[n] || n) +
+      (n === 1 ? " question." : " questions.");
     $("more-scenario").textContent = session.scenario.title;
-    $("more-count").textContent = session.history.length + " answers";
+    $("more-count").textContent = n + (n === 1 ? " answer" : " answers");
     show("s-more");
   }
 
