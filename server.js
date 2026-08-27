@@ -74,6 +74,21 @@ const BASE = "https://generativelanguage.googleapis.com/v1beta";
 // 3.5-flash 16s and truncated JSON, 3.7-flash 74s and a 503. Newest is not best,
 // and an unpinned model means latency can change without a code change.
 const MODEL = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+
+// Each model has its own free-tier quota. On 27 Aug 2026 the daily quota for one
+// model ran out mid-testing and every call returned HTTP 429, so the app served
+// static fallbacks for a whole session and looked as though the AI had simply
+// become worse. Quota exhaustion is now treated as a reason to move to the next
+// model rather than as a dead end.
+const MODEL_CHAIN = [MODEL].concat(
+  [
+    "gemini-3.5-flash-lite",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3.1-flash-lite",
+  ].filter((m) => m !== MODEL),
+);
+let activeModel = MODEL;
 const TIMEOUT_MS = Number(process.env.AI_TIMEOUT_MS || 15000);
 const TURNS = 4;
 
@@ -233,7 +248,9 @@ app.get("/api/scenarios", (req, res) => {
 app.get("/api/health", (req, res) => {
   res.json({
     ok: Boolean(API_KEY),
-    model: MODEL,
+    model: activeModel,
+    configured: MODEL,
+    chain: MODEL_CHAIN,
     turns: TURNS,
     database: dbReady,
   });
@@ -241,31 +258,35 @@ app.get("/api/health", (req, res) => {
 
 // --- Gemini plumbing ----------------------------------------------------------
 
-async function callGemini(systemText, parts) {
+async function callGemini(systemText, parts, model) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
-    const res = await fetch(`${BASE}/models/${MODEL}:generateContent`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": API_KEY,
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: systemText }] },
-        contents: [{ role: "user", parts: parts }],
-        generationConfig: {
-          responseMimeType: "application/json",
-          temperature: 0.8,
-          maxOutputTokens: 1200,
+    const res = await fetch(
+      `${BASE}/models/${model || activeModel}:generateContent`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": API_KEY,
         },
-      }),
-    });
+        signal: controller.signal,
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemText }] },
+          contents: [{ role: "user", parts: parts }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            temperature: 0.8,
+            maxOutputTokens: 1200,
+          },
+        }),
+      },
+    );
     const raw = await res.text();
     if (!res.ok)
       return {
         ok: false,
+        status: res.status,
         reason: `HTTP ${res.status}`,
         raw: raw.slice(0, 400),
       };
@@ -344,7 +365,29 @@ async function askGemini(systemText, parts, validate, kind) {
             },
           ]);
 
-    const res = await callGemini(systemText, attemptParts);
+    let res = await callGemini(systemText, attemptParts);
+
+    // 429 quota, 404 retired, 503 overloaded: the model is the problem, not the
+    // request. Move down the chain and remember the one that worked.
+    if (!res.ok && [429, 404, 503].indexOf(res.status) !== -1) {
+      for (let i = 0; i < MODEL_CHAIN.length; i++) {
+        const candidate = MODEL_CHAIN[i];
+        if (candidate === activeModel) continue;
+        const alt = await callGemini(systemText, attemptParts, candidate);
+        if (alt.ok) {
+          diag({
+            kind: kind,
+            outcome: "switched model",
+            reason: `${activeModel} returned ${res.status}`,
+            now: candidate,
+          });
+          activeModel = candidate;
+          res = alt;
+          break;
+        }
+      }
+    }
+
     if (!res.ok) {
       lastReason = res.reason;
       diag({
@@ -770,7 +813,8 @@ app.get("/api/diag", (req, res) => {
     return res.status(403).json({ ok: false, error: "Forbidden." });
   res.json({
     ok: true,
-    model: MODEL,
+    model: activeModel,
+    chain: MODEL_CHAIN,
     summary: {
       accepted: DIAG.filter((d) => d.outcome === "accepted").length,
       rejected: DIAG.filter((d) => d.outcome === "rejected").length,
