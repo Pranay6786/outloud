@@ -206,9 +206,11 @@
         ? "Question " + session.turn
         : "Question " + session.turn + " of " + TURNS;
     $("sp-question").textContent = session.question;
-    var firstEver = !(store.read().completed > 0);
+    // Shown on the first question of any session, not only a user's very first.
+    // It states how the product works rather than correcting the person, so it
+    // does not read as nagging, and it disappears from question two onward.
     var hint =
-      firstEver && session.turn === 1 && !session.retrying
+      session.turn === 1 && !session.retrying
         ? "There is no time limit. The more you say, the more it has to ask about."
         : "Take your time.";
     setMic("idle", "Tap to answer", hint);
@@ -508,6 +510,16 @@
   });
 
   // ---- boot ------------------------------------------------------------------
+  // Open with ?reset=1 to clear this phone's saved sessions and start fresh.
+  if (window.location.search.indexOf("reset=1") !== -1) {
+    try {
+      localStorage.removeItem("outloud");
+    } catch (e) {}
+    try {
+      history.replaceState(null, "", window.location.pathname);
+    } catch (e) {}
+  }
+
   fetch("/api/scenarios")
     .then(function (r) {
       return r.json();

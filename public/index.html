@@ -534,15 +534,63 @@
       .hidden {
         display: none;
       }
+
+      /* --- wordmark ----------------------------------------------------------- */
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+        margin: 2px 0 6px;
+      }
+      .brand-mark {
+        width: 40px;
+        height: 26px;
+        flex: none;
+        stroke: var(--sage);
+        stroke-width: 2.4;
+        stroke-linecap: round;
+        fill: none;
+      }
+      .brand-name {
+        font-family: var(--serif);
+        font-size: 34px;
+        line-height: 1;
+        letter-spacing: -0.018em;
+        color: var(--ink);
+      }
+      .brand-tag {
+        font-size: 13px;
+        color: var(--ink-soft);
+        margin: 0 0 24px;
+        padding-bottom: 16px;
+        border-bottom: 1px solid var(--line-soft);
+      }
+      .brand + .topbar {
+        border-top: 0;
+        margin-top: 18px;
+      }
+      .topbar-brand {
+        font-family: var(--serif);
+        font-size: 15px;
+        letter-spacing: 0;
+        text-transform: none;
+        font-weight: 400;
+        color: var(--ink);
+      }
     </style>
   </head>
   <body>
     <div class="app">
       <!-- 1. Welcome -->
       <section class="screen on" id="s-welcome">
-        <div class="topbar">
-          <span>OutLoud</span><span>Before you start</span>
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 44 28" aria-hidden="true">
+            <path d="M4 14h2M10 8v12M16 4v20M22 9v10M28 6v16M34 11v6M40 14h0" />
+          </svg>
+          <span class="brand-name">OutLoud</span>
         </div>
+        <p class="brand-tag">Practice speaking English, privately.</p>
+        <div class="topbar"><span>Before you start</span><span></span></div>
         <h1>A place to practice speaking, where nobody is listening.</h1>
         <ul class="list">
           <li>You pick a situation. You will be asked four questions.</li>
@@ -588,7 +636,9 @@
 
       <!-- 2. Choose -->
       <section class="screen" id="s-choose">
-        <div class="topbar"><span>OutLoud</span><span>Choose</span></div>
+        <div class="topbar">
+          <span class="topbar-brand">OutLoud</span><span>Choose</span>
+        </div>
         <h2>What do you want to practice?</h2>
         <ul class="pick" id="scenario-list"></ul>
       </section>
@@ -671,7 +721,13 @@
 
       <!-- 5. Home -->
       <section class="screen" id="s-home">
-        <div class="topbar"><span>OutLoud</span><span></span></div>
+        <div class="brand">
+          <svg class="brand-mark" viewBox="0 0 44 28" aria-hidden="true">
+            <path d="M4 14h2M10 8v12M16 4v20M22 9v10M28 6v16M34 11v6M40 14h0" />
+          </svg>
+          <span class="brand-name">OutLoud</span>
+        </div>
+        <div class="topbar"><span>Your practice</span><span></span></div>
         <p class="greet" id="home-greet">Welcome back</p>
         <div class="count">
           <b id="home-count">0</b><span>sessions completed</span>
