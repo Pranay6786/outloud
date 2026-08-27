@@ -29,6 +29,38 @@
     },
   };
 
+  // A per-browser id so sessions can be counted without an account. Replaced by a
+  // real identity only if the user chooses to give one.
+  function deviceId() {
+    var st = store.read();
+    if (!st.deviceId) {
+      st.deviceId =
+        "d-" +
+        Date.now().toString(36) +
+        "-" +
+        Math.random().toString(36).slice(2, 10);
+      store.write(st);
+    }
+    return st.deviceId;
+  }
+
+  function recordSession(answersCount, durationMs, extended) {
+    // Fire and forget. A storage failure must never affect the user's session.
+    try {
+      fetch("/api/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deviceId: deviceId(),
+          scenarioId: session.scenario.id,
+          answers: answersCount,
+          durationMs: durationMs,
+          extended: Boolean(extended),
+        }),
+      }).catch(function () {});
+    } catch (e) {}
+  }
+
   // ---- speech out ------------------------------------------------------------
   // The question is spoken as well as shown. Shown matters more: a noisy room, a
   // silent phone or a failed voice must never leave the user stuck.
@@ -382,6 +414,11 @@
     show("s-feedback");
 
     // A completed session is 3 or more spoken turns plus reaching this screen.
+    recordSession(
+      session.history.length,
+      Date.now() - session.startedAt,
+      session.extended,
+    );
     if (session.history.length >= 3) recordCompletion();
 
     fetch("/api/feedback", {
@@ -463,7 +500,74 @@
     speak(q);
   });
 
-  $("fb-done").addEventListener("click", goHome);
+  $("fb-done").addEventListener("click", function () {
+    var st = store.read();
+    // Asked once, after a win, and never again if answered or declined.
+    if ((st.completed || 0) >= 1 && !st.identified && !st.declinedIdentity) {
+      $("save-error").classList.add("hidden");
+      show("s-save");
+      return;
+    }
+    goHome();
+  });
+
+  $("save-skip").addEventListener("click", function () {
+    var st = store.read();
+    st.declinedIdentity = true;
+    store.write(st);
+    goHome();
+  });
+
+  $("save-submit").addEventListener("click", function () {
+    var name = $("save-name").value.trim();
+    var phone = $("save-phone").value.trim();
+    var digits = phone.replace(/[^0-9]/g, "");
+
+    if (digits.length < 10 || digits.length > 13) {
+      var e = $("save-error");
+      e.textContent =
+        "Please check the number. It should be at least 10 digits.";
+      e.classList.remove("hidden");
+      return;
+    }
+
+    $("save-submit").disabled = true;
+    $("save-submit").textContent = "Saving…";
+
+    fetch("/api/identify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ deviceId: deviceId(), name: name, phone: digits }),
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (d) {
+        $("save-submit").disabled = false;
+        $("save-submit").textContent = "Save my progress";
+        if (!d || !d.ok) {
+          var e2 = $("save-error");
+          e2.textContent =
+            (d && d.error) ||
+            "Could not save that. You can carry on without it.";
+          e2.classList.remove("hidden");
+          return;
+        }
+        var st = store.read();
+        st.identified = true;
+        st.name = name;
+        store.write(st);
+        goHome();
+      })
+      .catch(function () {
+        $("save-submit").disabled = false;
+        $("save-submit").textContent = "Save my progress";
+        var e3 = $("save-error");
+        e3.textContent =
+          "The connection dropped. You can carry on without saving.";
+        e3.classList.remove("hidden");
+      });
+  });
   $("sp-quit").addEventListener("click", function () {
     try {
       window.speechSynthesis && window.speechSynthesis.cancel();
@@ -478,7 +582,11 @@
     var s = store.read();
     $("home-count").textContent = s.completed || 0;
     $("home-greet").textContent =
-      (s.completed || 0) > 0 ? "Welcome back" : "Ready when you are";
+      (s.completed || 0) > 0
+        ? s.name
+          ? "Welcome back, " + s.name
+          : "Welcome back"
+        : "Ready when you are";
 
     var last = null;
     for (var i = 0; i < scenarios.length; i++) {

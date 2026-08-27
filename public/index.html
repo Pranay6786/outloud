@@ -535,6 +535,37 @@
         display: none;
       }
 
+      /* --- form fields -------------------------------------------------------- */
+      .field {
+        display: block;
+        margin: 0 0 14px;
+      }
+      .field span {
+        display: block;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        font-weight: 700;
+        color: var(--ink-soft);
+        margin: 0 0 7px;
+      }
+      .field input {
+        width: 100%;
+        padding: 14px 15px;
+        font-size: 16px;
+        font-family: var(--sans);
+        color: var(--ink);
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        box-shadow: var(--shadow);
+      }
+      .field input:focus {
+        outline: 2px solid var(--sage);
+        outline-offset: 1px;
+        border-color: var(--sage);
+      }
+
       /* --- wordmark ----------------------------------------------------------- */
       .brand {
         display: flex;
@@ -717,6 +748,43 @@
         </div>
         <button class="btn primary" id="fb-retry">Try that answer again</button>
         <button class="btn" id="fb-done">Done for today</button>
+      </section>
+
+      <!-- 4b. Save progress -->
+      <section class="screen" id="s-save">
+        <div class="topbar"><span>OutLoud</span><span>Optional</span></div>
+        <h2>Want to keep your progress?</h2>
+        <p>
+          Leave your name and number and your practice is saved even if you
+          change phone or clear your browser. It is only used to see whether
+          people keep practicing.
+        </p>
+        <div class="error hidden" id="save-error"></div>
+        <label class="field">
+          <span>Your name</span>
+          <input
+            id="save-name"
+            type="text"
+            autocomplete="name"
+            placeholder="First name is fine"
+          />
+        </label>
+        <label class="field">
+          <span>Phone number</span>
+          <input
+            id="save-phone"
+            type="tel"
+            inputmode="numeric"
+            autocomplete="tel"
+            placeholder="10 digit number"
+          />
+        </label>
+        <p class="privacy">
+          Nobody is called or messaged without asking you first. Your number is
+          never shown to anyone else and never sold.
+        </p>
+        <button class="btn primary" id="save-submit">Save my progress</button>
+        <button class="btn plain" id="save-skip">Not now</button>
       </section>
 
       <!-- 5. Home -->

@@ -6,6 +6,65 @@
 const express = require("express");
 const path = require("path");
 
+// --- storage -----------------------------------------------------------------
+// Optional by design. If DATABASE_URL is absent the app still runs and simply
+// records nothing, because a database problem must never stop someone practicing.
+let pool = null;
+let dbReady = false;
+let dbError = null;
+
+try {
+  if (process.env.DATABASE_URL) {
+    const { Pool } = require("pg");
+    pool = new Pool({
+      connectionString: process.env.DATABASE_URL,
+      ssl: { rejectUnauthorized: false },
+      max: 3,
+    });
+  }
+} catch (err) {
+  dbError = "pg module not installed: " + String(err.message || err);
+}
+
+async function initDb() {
+  if (!pool) {
+    dbError = dbError || "DATABASE_URL is not set";
+    return;
+  }
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id         SERIAL PRIMARY KEY,
+        device_id  TEXT UNIQUE NOT NULL,
+        name       TEXT,
+        phone      TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id          SERIAL PRIMARY KEY,
+        device_id   TEXT NOT NULL,
+        scenario    TEXT,
+        answers     INTEGER NOT NULL DEFAULT 0,
+        duration_ms INTEGER,
+        completed   BOOLEAN NOT NULL DEFAULT false,
+        extended    BOOLEAN NOT NULL DEFAULT false,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `);
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS sessions_device_idx ON sessions (device_id);`,
+    );
+    await pool.query(
+      `CREATE INDEX IF NOT EXISTS sessions_created_idx ON sessions (created_at);`,
+    );
+    dbReady = true;
+  } catch (err) {
+    dbError = String(err.message || err);
+  }
+}
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const API_KEY = process.env.GEMINI_API_KEY;
@@ -172,7 +231,12 @@ app.get("/api/scenarios", (req, res) => {
 });
 
 app.get("/api/health", (req, res) => {
-  res.json({ ok: Boolean(API_KEY), model: MODEL, turns: TURNS });
+  res.json({
+    ok: Boolean(API_KEY),
+    model: MODEL,
+    turns: TURNS,
+    database: dbReady,
+  });
 });
 
 // --- Gemini plumbing ----------------------------------------------------------
@@ -522,7 +586,147 @@ app.post("/api/feedback", async (req, res) => {
   });
 });
 
+// --- session and identity -----------------------------------------------------
+
+function cleanPhone(v) {
+  const digits = String(v || "").replace(/[^0-9]/g, "");
+  return digits.length >= 10 && digits.length <= 13 ? digits : null;
+}
+
+app.post("/api/session", async (req, res) => {
+  const { deviceId, scenarioId, answers, durationMs, extended } =
+    req.body || {};
+  if (!nonEmpty(deviceId))
+    return res.status(400).json({ ok: false, error: "No device id." });
+
+  // A completed session is three or more spoken answers plus reaching feedback.
+  const answerCount = Math.max(0, parseInt(answers, 10) || 0);
+  const completed = answerCount >= 3;
+
+  if (!dbReady)
+    return res.json({
+      ok: true,
+      stored: false,
+      reason: dbError || "no database",
+    });
+
+  try {
+    await pool.query(
+      `INSERT INTO sessions (device_id, scenario, answers, duration_ms, completed, extended)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        String(deviceId).slice(0, 64),
+        String(scenarioId || "").slice(0, 40),
+        answerCount,
+        Math.max(0, parseInt(durationMs, 10) || 0),
+        completed,
+        Boolean(extended),
+      ],
+    );
+    res.json({ ok: true, stored: true, completed });
+  } catch (err) {
+    // Never fail the user's session because a write failed.
+    res.json({ ok: true, stored: false, reason: String(err.message || err) });
+  }
+});
+
+app.post("/api/identify", async (req, res) => {
+  const { deviceId, name, phone } = req.body || {};
+  if (!nonEmpty(deviceId))
+    return res.status(400).json({ ok: false, error: "No device id." });
+
+  const phoneDigits = cleanPhone(phone);
+  if (!phoneDigits)
+    return res
+      .status(400)
+      .json({ ok: false, error: "That does not look like a phone number." });
+
+  if (!dbReady)
+    return res.json({
+      ok: true,
+      stored: false,
+      reason: dbError || "no database",
+    });
+
+  try {
+    await pool.query(
+      `INSERT INTO users (device_id, name, phone) VALUES ($1, $2, $3)
+       ON CONFLICT (device_id) DO UPDATE SET name = EXCLUDED.name, phone = EXCLUDED.phone`,
+      [
+        String(deviceId).slice(0, 64),
+        String(name || "").slice(0, 80),
+        phoneDigits,
+      ],
+    );
+    res.json({ ok: true, stored: true });
+  } catch (err) {
+    res.json({ ok: true, stored: false, reason: String(err.message || err) });
+  }
+});
+
+// --- metrics, for the Step 6 dashboard ----------------------------------------
+// Behind a key because it exposes counts, and it never returns phone numbers.
+app.get("/api/stats", async (req, res) => {
+  const key = process.env.ADMIN_KEY;
+  if (!key || req.query.key !== key)
+    return res.status(403).json({ ok: false, error: "Forbidden." });
+  if (!dbReady) return res.json({ ok: false, error: dbError || "no database" });
+
+  try {
+    const q = async (sql) => (await pool.query(sql)).rows;
+    const [totals] = await q(`
+      SELECT
+        COUNT(*)::int                                   AS sessions_started,
+        COUNT(*) FILTER (WHERE completed)::int          AS sessions_completed,
+        COUNT(DISTINCT device_id)::int                  AS devices,
+        COUNT(DISTINCT device_id) FILTER (WHERE completed)::int AS devices_completed,
+        COALESCE(ROUND(AVG(answers) FILTER (WHERE completed))::int, 0) AS avg_answers,
+        COUNT(*) FILTER (WHERE extended)::int           AS sessions_extended
+      FROM sessions
+    `);
+    const [identified] = await q(
+      `SELECT COUNT(*)::int AS identified_users FROM users WHERE phone IS NOT NULL`,
+    );
+    const [median] = await q(`
+      SELECT COALESCE(ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY duration_ms) / 1000)::int, 0) AS median_seconds
+      FROM sessions WHERE completed AND duration_ms > 0
+    `);
+    const byDay = await q(`
+      SELECT to_char(created_at::date, 'YYYY-MM-DD') AS day,
+             COUNT(*)::int AS started,
+             COUNT(*) FILTER (WHERE completed)::int AS completed
+      FROM sessions GROUP BY 1 ORDER BY 1 DESC LIMIT 14
+    `);
+    const byScenario = await q(`
+      SELECT scenario, COUNT(*)::int AS started, COUNT(*) FILTER (WHERE completed)::int AS completed
+      FROM sessions GROUP BY 1 ORDER BY 2 DESC
+    `);
+    const repeat = await q(`
+      SELECT sessions_per_device, COUNT(*)::int AS devices FROM (
+        SELECT device_id, COUNT(*)::int AS sessions_per_device
+        FROM sessions WHERE completed GROUP BY device_id
+      ) t GROUP BY 1 ORDER BY 1
+    `);
+
+    res.json({
+      ok: true,
+      note: "Week 4 completion cannot be computed until four weeks after the first signup.",
+      totals: { ...totals, ...identified, ...median },
+      byDay,
+      byScenario,
+      repeatDistribution: repeat,
+    });
+  } catch (err) {
+    res.status(500).json({ ok: false, error: String(err.message || err) });
+  }
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`OutLoud on ${PORT}, model ${MODEL}`);
   if (!API_KEY) console.log("WARNING: GEMINI_API_KEY is not set.");
+  initDb().then(() => {
+    console.log(
+      dbReady ? "Database ready." : "Database not in use: " + dbError,
+    );
+  });
 });
