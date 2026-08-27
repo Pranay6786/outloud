@@ -319,18 +319,66 @@ function normaliseText(t) {
 }
 
 // Two attempts, then the caller falls back to static content.
-async function askGemini(systemText, parts, validate) {
+// Kept in memory so a live session can be inspected afterwards. No transcripts,
+// no audio, no personal data: only what happened to each AI call.
+const DIAG = [];
+function diag(entry) {
+  DIAG.push(Object.assign({ at: new Date().toISOString() }, entry));
+  if (DIAG.length > 80) DIAG.shift();
+}
+
+// Two attempts, then the caller falls back to static content. The second attempt
+// is told what went wrong, otherwise it simply reproduces the rejected answer.
+async function askGemini(systemText, parts, validate, kind) {
   let lastReason = null;
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await callGemini(systemText, parts);
+    const attemptParts =
+      attempt === 0
+        ? parts
+        : parts.concat([
+            {
+              text:
+                "Your previous reply was rejected because: " +
+                lastReason +
+                ". Give a different reply that fixes exactly that.",
+            },
+          ]);
+
+    const res = await callGemini(systemText, attemptParts);
     if (!res.ok) {
       lastReason = res.reason;
+      diag({
+        kind: kind,
+        attempt: attempt,
+        outcome: "call failed",
+        reason: res.reason,
+        detail: String(res.raw || "").slice(0, 200),
+      });
       continue;
     }
     const parsed = extractJson(res.raw);
-    if (parsed && validate(parsed)) return { ok: true, data: parsed };
-    lastReason = parsed ? "missing fields" : "unparseable";
+    if (parsed && validate(parsed)) {
+      diag({ kind: kind, attempt: attempt, outcome: "accepted" });
+      return { ok: true, data: parsed };
+    }
+    lastReason = parsed
+      ? "the reply repeated something already used, or was missing a field"
+      : "the reply was not valid JSON";
+    diag({
+      kind: kind,
+      attempt: attempt,
+      outcome: "rejected",
+      reason: lastReason,
+      got: parsed
+        ? Object.keys(parsed).join(",")
+        : String(res.raw || "").slice(0, 200),
+    });
   }
+  diag({
+    kind: kind,
+    outcome: "fell back to static content",
+    reason: lastReason,
+  });
   return { ok: false, reason: lastReason };
 }
 
@@ -467,6 +515,7 @@ app.post("/api/turn", async (req, res) => {
       typeof d.transcript === "string" &&
       nonEmpty(d.question) &&
       !alreadyAsked(d.question),
+    "turn " + turnIndex,
   );
 
   if (result.ok) {
@@ -616,6 +665,7 @@ app.post("/api/feedback", async (req, res) => {
       nonEmpty(d.retry_question) &&
       !repeatsPrevious(d.strength) &&
       !repeatsPrevious(d.improvement),
+    "feedback",
   );
 
   if (result.ok) {
@@ -712,6 +762,24 @@ app.post("/api/identify", async (req, res) => {
   } catch (err) {
     res.json({ ok: true, stored: false, reason: String(err.message || err) });
   }
+});
+
+app.get("/api/diag", (req, res) => {
+  const key = process.env.ADMIN_KEY;
+  if (!key || req.query.key !== key)
+    return res.status(403).json({ ok: false, error: "Forbidden." });
+  res.json({
+    ok: true,
+    model: MODEL,
+    summary: {
+      accepted: DIAG.filter((d) => d.outcome === "accepted").length,
+      rejected: DIAG.filter((d) => d.outcome === "rejected").length,
+      callFailed: DIAG.filter((d) => d.outcome === "call failed").length,
+      fellBack: DIAG.filter((d) => d.outcome === "fell back to static content")
+        .length,
+    },
+    recent: DIAG.slice(-40).reverse(),
+  });
 });
 
 // --- metrics, for the Step 6 dashboard ----------------------------------------
