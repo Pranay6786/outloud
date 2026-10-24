@@ -12,6 +12,7 @@ const path = require("path");
 let pool = null;
 let dbReady = false;
 let dbError = null;
+let dbInitPromise = null;
 
 try {
   if (process.env.DATABASE_URL) {
@@ -63,6 +64,31 @@ async function initDb() {
   } catch (err) {
     dbError = String(err.message || err);
   }
+}
+
+// Share one initialization attempt across concurrent requests.
+function ensureDb() {
+  if (dbReady) return Promise.resolve(true);
+
+  if (!pool) {
+    dbError = dbError || "DATABASE_URL is not set";
+    return Promise.resolve(false);
+  }
+
+  if (!dbInitPromise) {
+    dbInitPromise = initDb()
+      .then(() => {
+        if (!dbReady) dbInitPromise = null;
+        return dbReady;
+      })
+      .catch((err) => {
+        dbError = String(err.message || err);
+        dbInitPromise = null;
+        return false;
+      });
+  }
+
+  return dbInitPromise;
 }
 
 // Kept in memory so a live session can be inspected afterwards. No transcripts,
@@ -287,7 +313,8 @@ app.get("/api/scenarios", (req, res) => {
   });
 });
 
-app.get("/api/health", (req, res) => {
+app.get("/api/health", async (req, res) => {
+  await ensureDb();
   res.json({
     ok: Boolean(API_KEY),
     model: currentModel(),
@@ -775,6 +802,7 @@ function cleanPhone(v) {
 }
 
 app.post("/api/session", async (req, res) => {
+  await ensureDb();
   const { deviceId, scenarioId, answers, durationMs, extended } =
     req.body || {};
   if (!nonEmpty(deviceId))
@@ -812,6 +840,7 @@ app.post("/api/session", async (req, res) => {
 });
 
 app.post("/api/identify", async (req, res) => {
+  await ensureDb();
   const { deviceId, name, phone } = req.body || {};
   if (!nonEmpty(deviceId))
     return res.status(400).json({ ok: false, error: "No device id." });
@@ -872,6 +901,7 @@ app.get("/api/stats", async (req, res) => {
   const key = process.env.ADMIN_KEY;
   if (!key || req.query.key !== key)
     return res.status(403).json({ ok: false, error: "Forbidden." });
+  await ensureDb();
   if (!dbReady) return res.json({ ok: false, error: dbError || "no database" });
 
   try {
@@ -926,7 +956,7 @@ app.get("/api/stats", async (req, res) => {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`OutLoud on ${PORT}, model ${MODEL}`);
   if (!API_KEY) console.log("WARNING: GEMINI_API_KEY is not set.");
-  initDb().then(() => {
+  ensureDb().then(() => {
     console.log(
       dbReady ? "Database ready." : "Database not in use: " + dbError,
     );
