@@ -9,3 +9,5 @@ node_modules/
 /outloud/
 .DS_Store
 outloud-source.zip
+
+outloud-production-backup.dump
